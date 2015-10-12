@@ -1,0 +1,19 @@
+syntax = "proto3";
+
+package steering;
+
+// The driving service definition.
+service Driver {
+  // Sends a greeting
+  rpc Forward (ForwardRequest) returns (ForwardReply) {}
+}
+
+// The request message containing the user's name.
+message ForwardRequest {
+  bool ok = 1;
+}
+
+// The response message containing the greetings
+message ForwardReply {
+  bool ok = 1;
+}
