@@ -52,14 +52,15 @@ func main() {
 	}
 	defer c.Close()
 
-	dst, err := net.ResolveUDPAddr("udp", "255.255.255.255:8032")
+	broadcastAddr := "255.255.255.255:8032"
+	dst, err := net.ResolveUDPAddr("udp", broadcastAddr)
 	if err != nil {
 		log.Fatal(err)
 	}
 
 	go func() {
+		log.Infof("Starting to broadcast our port %s on %s", grpcPort, broadcastAddr)
 		for {
-			log.Info("Broadcasting our port")
 			if _, err := c.WriteTo([]byte(*grpcPort), dst); err != nil {
 				log.Fatal(err)
 			}

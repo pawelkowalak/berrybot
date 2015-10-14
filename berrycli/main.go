@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"image"
 	_ "image/png"
+	"math"
 	"net"
 	"time"
 
@@ -34,6 +35,8 @@ var (
 	eng       sprite.Engine
 	scene     *sprite.Node
 	fps       *debug.FPS
+	touchPtX  float32
+	touchPtY  float32
 
 	// GRPC variables for driving.
 	conn   *grpc.ClientConn
@@ -41,20 +44,65 @@ var (
 	stream pb.Driver_DriveClient
 )
 
-type controller struct {
+// object is a generic 2D sprite with texture, position and size (in points).
+type object struct {
 	subTex        sprite.SubTex
 	width, height float32
 	posx, posy    float32
 	midx, midy    float32
 }
 
+// controller is an UI element that let's you drive Berry Bot! Duh.
+type controller struct {
+	object
+	stick object
+}
+
+// UpdateMiddle updates middle point of the stick based on current position and width.
+func (c *controller) UpdateMiddle() {
+	c.stick.midx = c.stick.posx + c.stick.width/2
+	c.stick.midy = c.stick.posy + c.stick.height/2
+}
+
+// UpdatePosition tries to move stick inside controller based on current touch event's (x, y).
+func (c *controller) UpdatePosition() {
+	inside := ctrl.IsInside(ctrl.stick.midx, ctrl.stick.midy)
+	if touchPtX-1 > ctrl.stick.midx && (inside || ctrl.stick.midx <= ctrl.midx) {
+		ctrl.stick.posx++
+	} else if touchPtX+1 < ctrl.stick.midx && (inside || ctrl.stick.midx >= ctrl.midx) {
+		ctrl.stick.posx--
+	}
+	if touchPtY-1 > ctrl.stick.midy && (inside || ctrl.stick.midy <= ctrl.midy) {
+		ctrl.stick.posy++
+	} else if touchPtY+1 < ctrl.stick.midy && (inside || ctrl.stick.midy >= ctrl.midy) {
+		ctrl.stick.posy--
+	}
+}
+
+// IsInside checks if given (x, y) point is inside controller circle.
+func (c *controller) IsInside(x, y float32) bool {
+	r2 := math.Pow(float64(c.width/2-c.stick.width/2), 2)
+	d2 := math.Pow(float64(x-c.midx), 2) + math.Pow(float64(y-c.midy), 2)
+	return d2 < r2
+}
+
+// Size of controller and stick inside in points.
+const (
+	ctrlSize      = 80
+	ctrlStickSize = 35
+)
+
+// newController creates new controller and sets its sizes.
 func newController() *controller {
 	c := new(controller)
-	c.width = 80
-	c.height = 80
+	c.width = ctrlSize
+	c.height = ctrlSize
+	c.stick.width = ctrlStickSize
+	c.stick.height = ctrlStickSize
 	return c
 }
 
+// There can be only one controller.
 var ctrl = newController()
 
 func main() {
@@ -88,6 +136,14 @@ func main() {
 				}
 				ctrl.midx = ctrl.posx + ctrl.width/2
 				ctrl.midy = ctrl.posy + ctrl.height/2
+				ctrl.stick.posx = ctrl.midx - ctrl.stick.width/2
+				ctrl.stick.posy = ctrl.midy - ctrl.stick.height/2
+				touchPtX = ctrl.midx
+				touchPtY = ctrl.midy
+				log.WithFields(log.Fields{
+					"posx": ctrl.posx,
+					"posy": ctrl.posy,
+				}).Info("controller position")
 			case paint.Event:
 				if glctx == nil || e.External {
 					// As we are actively painting as fast as
@@ -102,12 +158,26 @@ func main() {
 				// after this one is shown.
 				a.Send(paint.Event{})
 			case touch.Event:
-				d := new(pb.Direction)
-				// Normalize touch input based on controller position
-				if sz.PixelsPerPt > 0 && ctrl.midx > 0 && ctrl.midy > 0 {
-					d.Dx = int32((e.X/sz.PixelsPerPt - ctrl.midx) * 100 / ctrl.midx)
-					d.Dy = int32((ctrl.midy - e.Y/sz.PixelsPerPt) * 100 / ctrl.midy)
+				if sz.PixelsPerPt == 0 {
+					break
 				}
+				ptx := e.X / sz.PixelsPerPt
+				pty := e.Y / sz.PixelsPerPt
+				d := new(pb.Direction)
+				switch e.Type {
+				case touch.TypeEnd:
+					log.Info("Resetting back to middle")
+					touchPtX = ctrl.midx
+					touchPtY = ctrl.midy
+					d.Dx = 0
+					d.Dy = 0
+				default:
+					touchPtX = ptx
+					touchPtY = pty
+					d.Dx = int32(ctrl.stick.midx - ctrl.midx)
+					d.Dy = int32(ctrl.midy - ctrl.stick.midy)
+				}
+
 				log.WithFields(log.Fields{
 					"dx": d.Dx,
 					"dy": d.Dy,
@@ -115,6 +185,7 @@ func main() {
 				if err := stream.Send(d); err != nil {
 					log.Fatalf("%v.Send(%v) = %v", stream, d, err)
 				}
+
 			}
 		}
 	})
@@ -182,16 +253,31 @@ func loadScene() {
 	})
 
 	// Controller boundaries.
-	circle := newNode()
-	eng.SetSubTex(circle, ctrl.subTex)
-	eng.SetTransform(circle, f32.Affine{
-		{ctrl.width, 0, ctrl.posx},
-		{0, ctrl.height, ctrl.posy},
+	ctrlNode := newNode()
+	ctrlNode.Arranger = arrangerFunc(func(eng sprite.Engine, ctrlNode *sprite.Node, t clock.Time) {
+		eng.SetSubTex(ctrlNode, ctrl.subTex)
+		eng.SetTransform(ctrlNode, f32.Affine{
+			{ctrl.width, 0, ctrl.posx},
+			{0, ctrl.height, ctrl.posy},
+		})
 	})
+
+	// Stick position
+	stickNode := newNode()
+	stickNode.Arranger = arrangerFunc(func(eng sprite.Engine, stickNode *sprite.Node, t clock.Time) {
+		eng.SetSubTex(stickNode, ctrl.stick.subTex)
+		ctrl.UpdateMiddle()
+		ctrl.UpdatePosition()
+		eng.SetTransform(stickNode, f32.Affine{
+			{ctrl.stick.width, 0, ctrl.stick.posx},
+			{0, ctrl.stick.height, ctrl.stick.posy},
+		})
+	})
+
 }
 
-func loadController() {
-	a, err := asset.Open("circle.png")
+func loadTexture(name string) sprite.Texture {
+	a, err := asset.Open(name)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -205,7 +291,18 @@ func loadController() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	ctrl.subTex = sprite.SubTex{T: t, R: image.Rect(0, 0, 300, 300)}
+	return t
+}
+
+func loadController() {
+	ctrl.subTex = sprite.SubTex{
+		T: loadTexture("circle.png"),
+		R: image.Rect(0, 0, 320, 320),
+	}
+	ctrl.stick.subTex = sprite.SubTex{
+		T: loadTexture("stick.png"),
+		R: image.Rect(0, 0, 120, 120),
+	}
 }
 
 type arrangerFunc func(e sprite.Engine, n *sprite.Node, t clock.Time)
@@ -214,7 +311,7 @@ func (a arrangerFunc) Arrange(e sprite.Engine, n *sprite.Node, t clock.Time) { a
 
 func onPaint(glctx gl.Context, sz size.Event) {
 	// Fill background with white.
-	glctx.ClearColor(1, 1, 1, 1)
+	glctx.ClearColor(0, 0, 0, 1)
 	glctx.Clear(gl.COLOR_BUFFER_BIT)
 	now := clock.Time(time.Since(startTime) * 60 / time.Second)
 	eng.Render(scene, now, sz)
