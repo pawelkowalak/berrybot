@@ -4,16 +4,16 @@ package steering;
 
 // The driving service definition.
 service Driver {
-  // Sends a greeting
-  rpc Forward (ForwardRequest) returns (ForwardReply) {}
+  // Drive is a client-to-server stream providing direction.
+  rpc Drive(stream Direction) returns (DirectionReply) {}
 }
 
-// The request message containing the user's name.
-message ForwardRequest {
-  bool ok = 1;
+// Direction is normalized delta x and y that corresponds to joystick position. Range should be between -100 and 100.
+message Direction {
+  int32 dx = 1;
+  int32 dy = 2;
 }
 
-// The response message containing the greetings
-message ForwardReply {
+message DirectionReply {
   bool ok = 1;
 }
