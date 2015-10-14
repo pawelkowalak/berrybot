@@ -1,8 +1,10 @@
 package main
 
 import (
+	"fmt"
 	"image"
 	_ "image/png"
+	"net"
 	"time"
 
 	"golang.org/x/mobile/app"
@@ -127,8 +129,25 @@ func onStart(glctx gl.Context) {
 	loadScene()
 	fps = debug.NewFPS(images)
 
-	var err error
-	conn, err = grpc.Dial("192.168.2.239:31337", grpc.WithInsecure())
+	// Listen for bots on broadcast.
+	c, err := net.ListenPacket("udp", ":8032")
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer c.Close()
+	port := make([]byte, 512)
+	_, peer, err := c.ReadFrom(port)
+	if err != nil {
+		log.Fatal(err)
+	}
+	log.Printf("Received port broadcast from %s", peer)
+	host, _, err := net.SplitHostPort(peer.String())
+	if err != nil {
+		log.Fatalf("can't parse peer IP address %v", err)
+	}
+
+	// Connect to first discovered bot via GRPC.
+	conn, err = grpc.Dial(fmt.Sprintf("%s:%s", host, string(port)), grpc.WithInsecure())
 	if err != nil {
 		log.Fatalf("did not connect: %v", err)
 	}

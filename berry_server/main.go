@@ -1,9 +1,10 @@
 package main
 
 import (
-	"fmt"
+	"flag"
 	"io"
 	"net"
+	"time"
 
 	"google.golang.org/grpc"
 
@@ -13,6 +14,8 @@ import (
 
 // server is used to implement hellowrld.GreeterServer.
 type server struct{}
+
+var grpcPort = flag.String("grpc-port", "31337", "gRPC listen port")
 
 func (s *server) Drive(stream pb.Driver_DriveServer) error {
 	for {
@@ -33,11 +36,37 @@ func (s *server) Drive(stream pb.Driver_DriveServer) error {
 }
 
 func main() {
-	lis, err := net.Listen("tcp", fmt.Sprintf(":%d", 31337))
+	flag.Parse()
+	// Listen for GRPC connections.
+	lis, err := net.Listen("tcp", ":"+*grpcPort)
 	if err != nil {
 		log.Fatalf("failed to listen: %v", err)
 	}
 	s := grpc.NewServer()
 	pb.RegisterDriverServer(s, &server{})
-	s.Serve(lis)
+
+	// Open broadcast connection.
+	c, err := net.ListenPacket("udp", ":0")
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer c.Close()
+
+	dst, err := net.ResolveUDPAddr("udp", "255.255.255.255:8032")
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	go func() {
+		for {
+			log.Info("Broadcasting our port")
+			if _, err := c.WriteTo([]byte(*grpcPort), dst); err != nil {
+				log.Fatal(err)
+			}
+			time.Sleep(time.Second)
+		}
+	}()
+
+	// Start serving GRPC.
+	log.Fatal(s.Serve(lis))
 }
