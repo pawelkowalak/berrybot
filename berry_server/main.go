@@ -9,6 +9,7 @@ import (
 	"google.golang.org/grpc"
 
 	log "github.com/Sirupsen/logrus"
+	"github.com/stianeikeland/go-rpio"
 	pb "github.com/viru/berrybot/proto"
 )
 
@@ -30,23 +31,23 @@ func (g *gpioMock) Low() {
 }
 
 func (s *server) Drive(stream pb.Driver_DriveServer) error {
-	// err := rpio.Open()
-	// if err != nil {
-	// 	log.Fatalf("can't open rpio: %v", err)
-	// }
-	// defer rpio.Close()
-	// leftOn := rpio.Pin(23)
-	// leftFwd := rpio.Pin(4)
-	// rightOn := rpio.Pin(24)
-	// rightFwd := rpio.Pin(17)
-	// leftOn.Output()
-	// leftFwd.Output()
-	// rightOn.Output()
-	// rightFwd.Output()
-	leftOn := gpioMock{"leftOn"}
-	rightOn := gpioMock{"rightOn"}
-	leftFwd := gpioMock{"leftFwd"}
-	rightFwd := gpioMock{"rightFwd"}
+	err := rpio.Open()
+	if err != nil {
+		log.Fatalf("can't open rpio: %v", err)
+	}
+	defer rpio.Close()
+	leftOn := rpio.Pin(23)
+	leftFwd := rpio.Pin(4)
+	rightOn := rpio.Pin(24)
+	rightFwd := rpio.Pin(17)
+	leftOn.Output()
+	leftFwd.Output()
+	rightOn.Output()
+	rightFwd.Output()
+	// leftOn := gpioMock{"leftOn"}
+	// rightOn := gpioMock{"rightOn"}
+	// leftFwd := gpioMock{"leftFwd"}
+	// rightFwd := gpioMock{"rightFwd"}
 	for {
 		d, err := stream.Recv()
 		if err == io.EOF {
