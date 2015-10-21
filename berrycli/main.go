@@ -1,13 +1,12 @@
 package main
 
 import (
-	"fmt"
 	"image"
 	_ "image/png"
 	"math"
-	"net"
 	"time"
 
+	log "github.com/Sirupsen/logrus"
 	"golang.org/x/mobile/app"
 	"golang.org/x/mobile/asset"
 	"golang.org/x/mobile/event/lifecycle"
@@ -21,10 +20,8 @@ import (
 	"golang.org/x/mobile/exp/sprite/clock"
 	"golang.org/x/mobile/exp/sprite/glsprite"
 	"golang.org/x/mobile/gl"
-	"golang.org/x/net/context"
-	"google.golang.org/grpc"
 
-	log "github.com/Sirupsen/logrus"
+	"github.com/viru/berrybot/berrycli/remote"
 	pb "github.com/viru/berrybot/proto"
 )
 
@@ -37,11 +34,6 @@ var (
 	fps       *debug.FPS
 	touchPtX  float32
 	touchPtY  float32
-
-	// GRPC variables for driving.
-	conn   *grpc.ClientConn
-	cli    pb.DriverClient
-	stream pb.Driver_DriveClient
 )
 
 // object is a generic 2D sprite with texture, position and size (in points).
@@ -105,90 +97,106 @@ func newController() *controller {
 // There can be only one controller.
 var ctrl = newController()
 
-func main() {
-	app.Main(func(a app.App) {
-		var glctx gl.Context
-		var sz size.Event
-		for e := range a.Events() {
-			switch e := a.Filter(e).(type) {
-			case lifecycle.Event:
-				switch e.Crosses(lifecycle.StageVisible) {
-				case lifecycle.CrossOn:
-					glctx, _ = e.DrawContext.(gl.Context)
-					onStart(glctx)
-					a.Send(paint.Event{})
-				case lifecycle.CrossOff:
-					onStop(glctx)
-					glctx = nil
-				}
-			case size.Event:
-				sz = e
-				switch sz.Orientation {
-				case size.OrientationPortrait:
-					ctrl.posx = (float32(sz.WidthPt) - ctrl.width) / 2
-					ctrl.posy = (float32(sz.HeightPt) - ctrl.height*1.5)
-				case size.OrientationLandscape:
-					ctrl.posx = (float32(sz.WidthPt) - ctrl.width*1.5)
-					ctrl.posy = (float32(sz.HeightPt) - ctrl.height) / 2
-				default:
-					ctrl.posx = (float32(sz.WidthPt) - ctrl.width) / 2
-					ctrl.posy = (float32(sz.HeightPt) - ctrl.height*1.5)
-				}
-				ctrl.midx = ctrl.posx + ctrl.width/2
-				ctrl.midy = ctrl.posy + ctrl.height/2
-				ctrl.stick.posx = ctrl.midx - ctrl.stick.width/2
-				ctrl.stick.posy = ctrl.midy - ctrl.stick.height/2
+type client struct {
+	remote *remote.Service
+}
+
+func newClient() *client {
+	c := new(client)
+	c.remote = remote.NewService()
+	go c.remote.Connect()
+	return c
+}
+
+func (c *client) main(a app.App) {
+	var glctx gl.Context
+	var sz size.Event
+	for e := range a.Events() {
+		switch e := a.Filter(e).(type) {
+		case lifecycle.Event:
+			switch e.Crosses(lifecycle.StageVisible) {
+			case lifecycle.CrossOn:
+				glctx, _ = e.DrawContext.(gl.Context)
+				onStart(glctx)
+				a.Send(paint.Event{})
+			case lifecycle.CrossOff:
+				onStop(glctx)
+				c.remote.Close()
+				glctx = nil
+			}
+		case size.Event:
+			sz = e
+			switch sz.Orientation {
+			case size.OrientationPortrait:
+				ctrl.posx = (float32(sz.WidthPt) - ctrl.width) / 2
+				ctrl.posy = (float32(sz.HeightPt) - ctrl.height*1.5)
+			case size.OrientationLandscape:
+				ctrl.posx = (float32(sz.WidthPt) - ctrl.width*1.5)
+				ctrl.posy = (float32(sz.HeightPt) - ctrl.height) / 2
+			default:
+				ctrl.posx = (float32(sz.WidthPt) - ctrl.width) / 2
+				ctrl.posy = (float32(sz.HeightPt) - ctrl.height*1.5)
+			}
+			ctrl.midx = ctrl.posx + ctrl.width/2
+			ctrl.midy = ctrl.posy + ctrl.height/2
+			ctrl.stick.posx = ctrl.midx - ctrl.stick.width/2
+			ctrl.stick.posy = ctrl.midy - ctrl.stick.height/2
+			touchPtX = ctrl.midx
+			touchPtY = ctrl.midy
+			log.WithFields(log.Fields{
+				"posx": ctrl.posx,
+				"posy": ctrl.posy,
+			}).Info("controller position")
+		case paint.Event:
+			if glctx == nil || e.External {
+				// As we are actively painting as fast as
+				// we can (usually 60 FPS), skip any paint
+				// events sent by the system.
+				continue
+			}
+
+			onPaint(glctx, sz)
+			a.Publish()
+			// Drive the animation by preparing to paint the next frame
+			// after this one is shown.
+			a.Send(paint.Event{})
+		case touch.Event:
+			if sz.PixelsPerPt == 0 {
+				break
+			}
+			ptx := e.X / sz.PixelsPerPt
+			pty := e.Y / sz.PixelsPerPt
+			d := new(pb.Direction)
+			switch e.Type {
+			case touch.TypeEnd:
+				log.Info("Resetting back to middle")
 				touchPtX = ctrl.midx
 				touchPtY = ctrl.midy
-				log.WithFields(log.Fields{
-					"posx": ctrl.posx,
-					"posy": ctrl.posy,
-				}).Info("controller position")
-			case paint.Event:
-				if glctx == nil || e.External {
-					// As we are actively painting as fast as
-					// we can (usually 60 FPS), skip any paint
-					// events sent by the system.
-					continue
-				}
+				d.Dx = 0
+				d.Dy = 0
+			default:
+				touchPtX = ptx
+				touchPtY = pty
+				d.Dx = int32(ctrl.stick.midx - ctrl.midx)
+				d.Dy = int32(ctrl.midy - ctrl.stick.midy)
+			}
 
-				onPaint(glctx, sz)
-				a.Publish()
-				// Drive the animation by preparing to paint the next frame
-				// after this one is shown.
-				a.Send(paint.Event{})
-			case touch.Event:
-				if sz.PixelsPerPt == 0 {
-					break
+			log.WithFields(log.Fields{
+				"dx": d.Dx,
+				"dy": d.Dy,
+			}).Info("Normalized inputs")
+			if c.remote.Connected {
+				if err := c.remote.Stream.Send(d); err != nil {
+					log.Fatalf("%v.Send(%v) = %v", c.remote.Stream, d, err)
 				}
-				ptx := e.X / sz.PixelsPerPt
-				pty := e.Y / sz.PixelsPerPt
-				d := new(pb.Direction)
-				switch e.Type {
-				case touch.TypeEnd:
-					log.Info("Resetting back to middle")
-					touchPtX = ctrl.midx
-					touchPtY = ctrl.midy
-					d.Dx = 0
-					d.Dy = 0
-				default:
-					touchPtX = ptx
-					touchPtY = pty
-					d.Dx = int32(ctrl.stick.midx - ctrl.midx)
-					d.Dy = int32(ctrl.midy - ctrl.stick.midy)
-				}
-
-				log.WithFields(log.Fields{
-					"dx": d.Dx,
-					"dy": d.Dy,
-				}).Info("Normalized inputs")
-				if err := stream.Send(d); err != nil {
-					log.Fatalf("%v.Send(%v) = %v", stream, d, err)
-				}
-
 			}
 		}
-	})
+	}
+}
+
+func main() {
+	c := newClient()
+	app.Main(c.main)
 }
 
 func onStart(glctx gl.Context) {
@@ -199,41 +207,12 @@ func onStart(glctx gl.Context) {
 	eng = glsprite.Engine(images)
 	loadScene()
 	fps = debug.NewFPS(images)
-
-	// Listen for bots on broadcast.
-	c, err := net.ListenPacket("udp", ":8032")
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer c.Close()
-	port := make([]byte, 512)
-	_, peer, err := c.ReadFrom(port)
-	if err != nil {
-		log.Fatal(err)
-	}
-	log.Printf("Received port broadcast from %s", peer)
-	host, _, err := net.SplitHostPort(peer.String())
-	if err != nil {
-		log.Fatalf("can't parse peer IP address %v", err)
-	}
-
-	// Connect to first discovered bot via GRPC.
-	conn, err = grpc.Dial(fmt.Sprintf("%s:%s", host, string(port)), grpc.WithInsecure())
-	if err != nil {
-		log.Fatalf("did not connect: %v", err)
-	}
-	cli = pb.NewDriverClient(conn)
-	stream, err = cli.Drive(context.Background())
-	if err != nil {
-		log.Fatalf("%v.Drive(_) = _, %v", cli, err)
-	}
 }
 
 func onStop(glctx gl.Context) {
 	eng.Release()
 	fps.Release()
 	images.Release()
-	conn.Close()
 }
 
 func newNode() *sprite.Node {
