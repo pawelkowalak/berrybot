@@ -2,7 +2,9 @@ package main
 
 import (
 	"image"
+	_ "image/jpeg"
 	_ "image/png"
+	"io"
 	"math"
 	"time"
 
@@ -27,6 +29,12 @@ var (
 	touchPtY float32
 )
 
+// Size of controller and stick inside in points.
+const (
+	ctrlSize      = 80
+	ctrlStickSize = 35
+)
+
 // obj2d is a generic 2D sprite with texture, position and size (in points).
 type obj2d struct {
 	subTex        sprite.SubTex
@@ -39,6 +47,16 @@ type obj2d struct {
 type controller struct {
 	obj2d
 	stick obj2d
+}
+
+// newController creates new controller and sets its sizes.
+func newController() *controller {
+	c := new(controller)
+	c.width = ctrlSize
+	c.height = ctrlSize
+	c.stick.width = ctrlStickSize
+	c.stick.height = ctrlStickSize
+	return c
 }
 
 // UpdateMiddle updates middle point of the stick based on current position and width.
@@ -88,27 +106,20 @@ func (c *controller) loadTextures(rs *render.Service) {
 	}
 }
 
-// Size of controller and stick inside in points.
-const (
-	ctrlSize      = 80
-	ctrlStickSize = 35
-)
+type camView struct {
+	obj2d
+}
 
-// newController creates new controller and sets its sizes.
-func newController() *controller {
-	c := new(controller)
-	c.width = ctrlSize
-	c.height = ctrlSize
-	c.stick.width = ctrlStickSize
-	c.stick.height = ctrlStickSize
-	return c
+func newCamView() *camView {
+	return &camView{}
 }
 
 // client combines render, remote and controller services.
 type client struct {
-	render *render.Service
-	remote *remote.Service
-	ctrl   *controller
+	render  *render.Service
+	remote  *remote.Service
+	ctrl    *controller
+	camView *camView
 }
 
 // newClient creates new client and its sub-services.
@@ -117,8 +128,40 @@ func newClient() *client {
 	c.render = render.NewService(time.Now())
 	c.remote = remote.NewService()
 	c.ctrl = newController()
+	c.camView = newCamView()
 	go c.remote.Connect()
+	go c.updateCamView()
 	return c
+}
+
+func (c *client) updateCamView() {
+	for {
+		if c.remote.IsConnected() {
+			im, err := c.remote.VideoStream.Recv()
+			if err == io.EOF {
+				log.Info("got EOF")
+				return
+			}
+			if err != nil {
+				log.Warnf("GetImage(_) = _, %v", err)
+				continue
+			}
+			log.Infof("*** image %d", len(im.Image))
+			if c.camView.subTex.T != nil {
+				log.Info("releasing old image")
+				c.camView.subTex.T.Release()
+			}
+			view, err := c.render.LoadTexture(im.Image)
+			if err != nil {
+				log.Warnf("Can't load textures: %v", err)
+				continue
+			}
+			c.camView.subTex = sprite.SubTex{
+				T: view,
+				R: image.Rect(0, 0, 640, 480),
+			}
+		}
+	}
 }
 
 func (c *client) main(a app.App) {
@@ -133,8 +176,17 @@ func (c *client) main(a app.App) {
 				c.loadScene()
 				a.Send(paint.Event{})
 			case lifecycle.CrossOff:
+				// log.Info("closing connection")
+				// c.remote.Close()
+				log.Info("shutting down renderer")
 				c.render.Teardown()
-				c.remote.Close()
+				// f, err := os.Create("bb.mprof")
+				// if err != nil {
+				// 	log.Fatal(err)
+				// }
+				// log.Info("dumping profile")
+				// pprof.WriteHeapProfile(f)
+				// f.Close()
 			}
 		case size.Event:
 			sz = e
@@ -190,9 +242,9 @@ func (c *client) main(a app.App) {
 				"dx": d.Dx,
 				"dy": d.Dy,
 			}).Info("Normalized inputs")
-			if c.remote.Connected {
-				if err := c.remote.Stream.Send(d); err != nil {
-					log.Fatalf("%v.Send(%v) = %v", c.remote.Stream, d, err)
+			if c.remote.IsConnected() {
+				if err := c.remote.DriveStream.Send(d); err != nil {
+					log.Fatalf("%v.Send(%v) = %v", c.remote.DriveStream, d, err)
 				}
 			}
 		}
@@ -232,6 +284,18 @@ func (c *client) loadScene() {
 		eng.SetTransform(stickNode, f32.Affine{
 			{c.ctrl.stick.width, 0, c.ctrl.stick.posx},
 			{0, c.ctrl.stick.height, c.ctrl.stick.posy},
+		})
+	})
+
+	cam, err := c.render.NewNode()
+	if err != nil {
+		log.Fatalf("Can't load scene: %v", err)
+	}
+	cam.Arranger = arrangerFunc(func(eng sprite.Engine, cam *sprite.Node, t clock.Time) {
+		eng.SetSubTex(cam, c.camView.subTex)
+		eng.SetTransform(cam, f32.Affine{
+			{100, 0, 0},
+			{0, 60, 0},
 		})
 	})
 

@@ -5,6 +5,7 @@
 package render
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"image"
@@ -32,6 +33,7 @@ type Service struct {
 	engine    sprite.Engine
 	scene     *sprite.Node
 	fps       *debug.FPS
+	loaded    bool
 }
 
 // NewService initializes new render service.
@@ -55,10 +57,12 @@ func (s *Service) Init(glctx gl.Context) {
 		{1, 0, 0},
 		{0, 1, 0},
 	})
+	s.loaded = true
 }
 
 // Teardown releases engine and clears GL context. Called at CrossOff event.
 func (s *Service) Teardown() {
+	s.loaded = false
 	s.engine.Release()
 	s.fps.Release()
 	s.images.Release()
@@ -95,12 +99,32 @@ func (s *Service) OpenTexture(name string) (sprite.Texture, error) {
 	return t, nil
 }
 
+func (s *Service) LoadTexture(data []byte) (sprite.Texture, error) {
+	if !s.loaded {
+		return nil, errors.New("engine not loaded yet")
+	}
+	r := bytes.NewReader(data)
+	img, _, err := image.Decode(r)
+	if err != nil {
+		return nil, fmt.Errorf("can't decode texture file: %v", err)
+	}
+	t, err := s.engine.LoadTexture(img)
+	if err != nil {
+		return nil, fmt.Errorf("can't load texture file: %v", err)
+	}
+	return t, nil
+}
+
 // Render fills screen with background color, clears buffer and renders scene.
-func (s *Service) Render(sz size.Event) {
+func (s *Service) Render(sz size.Event) error {
+	if !s.loaded {
+		return errors.New("engine not loaded")
+	}
 	// Fill background with white.
 	s.glctx.ClearColor(0, 0, 0, 1)
 	s.glctx.Clear(gl.COLOR_BUFFER_BIT)
 	now := clock.Time(time.Since(s.startTime) * 60 / time.Second)
 	s.engine.Render(s.scene, now, sz)
 	s.fps.Draw(sz)
+	return nil
 }

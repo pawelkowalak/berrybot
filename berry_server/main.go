@@ -2,8 +2,10 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"io"
 	"net"
+	"os/exec"
 	"time"
 
 	"google.golang.org/grpc"
@@ -19,7 +21,10 @@ type server struct{}
 func (s *server) Drive(stream pb.Driver_DriveServer) error {
 	err := rpio.Open()
 	if err != nil {
-		log.Fatalf("can't open rpio: %v", err)
+		log.Warnf("can't open rpio: %v", err) // FIXME: is it ok to send message instead of returning error?
+		return stream.SendMsg(&pb.DriveReply{
+			Ok: false,
+		})
 	}
 	defer rpio.Close()
 	leftOn := rpio.Pin(23)
@@ -33,7 +38,7 @@ func (s *server) Drive(stream pb.Driver_DriveServer) error {
 	for {
 		d, err := stream.Recv()
 		if err == io.EOF {
-			return stream.SendAndClose(&pb.DirectionReply{
+			return stream.SendAndClose(&pb.DriveReply{
 				Ok: true,
 			})
 		}
@@ -99,6 +104,27 @@ func (s *server) Drive(stream pb.Driver_DriveServer) error {
 			rightFwd.Low()
 		}
 	}
+}
+
+func (s *server) GetImage(image *pb.Image, stream pb.Driver_GetImageServer) error {
+	if image.Live {
+		for {
+			out, err := exec.Command("/bin/cat", "/Users/viru/Desktop/space.jpg").Output() // FIXME: needs memprofiling
+			if err != nil {
+				log.Fatal(err)
+			}
+			b := pb.ImageBytes{}
+			b.Image = out
+			log.Infof("sending %d bytes", len(b.Image))
+			if err := stream.Send(&b); err != nil {
+				e := fmt.Errorf("can't send image: %+v", err)
+				log.Warning(e)
+				return e
+			}
+			time.Sleep(time.Second)
+		}
+	}
+	return nil
 }
 
 var grpcPort = flag.String("grpc-port", "31337", "gRPC listen port")

@@ -5,7 +5,9 @@ package steering;
 // The driving service definition.
 service Driver {
   // Drive is a client-to-server stream providing direction.
-  rpc Drive(stream Direction) returns (DirectionReply) {}
+  rpc Drive(stream Direction) returns (DriveReply) {}
+  rpc GetImage(Image) returns (stream ImageBytes) {}
+  // rpc GetVideo(Video) returns (stream VideoBytes) {}
 }
 
 // Direction is normalized delta x and y that corresponds to joystick position. Range should be between -100 and 100.
@@ -14,6 +16,14 @@ message Direction {
   int32 dy = 2;
 }
 
-message DirectionReply {
+message DriveReply {
   bool ok = 1;
+}
+
+message Image {
+  bool live = 1;
+}
+
+message ImageBytes {
+  bytes image = 1;
 }

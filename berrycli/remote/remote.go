@@ -16,14 +16,20 @@ import (
 
 // Service provides Stream object and connection status to the clients.
 type Service struct {
-	Stream    pb.Driver_DriveClient
-	Connected bool
-	conn      *grpc.ClientConn
+	DriveStream pb.Driver_DriveClient
+	VideoStream pb.Driver_GetImageClient
+	connected   bool
+	conn        *grpc.ClientConn
+	cli         pb.DriverClient
 }
 
 // NewService initializes new remote service.
 func NewService() *Service {
 	return &Service{}
+}
+
+func (s *Service) IsConnected() bool {
+	return s.connected
 }
 
 // Connect listens for UDP broadcasts on port 8032 and tries to connect to
@@ -52,17 +58,25 @@ func (s *Service) Connect() {
 		log.Fatalf("did not connect: %v", err)
 	}
 	cli := pb.NewDriverClient(s.conn)
-	s.Stream, err = cli.Drive(context.Background())
+
+	s.DriveStream, err = cli.Drive(context.Background())
 	if err != nil {
 		log.Fatalf("%v.Drive(_) = _, %v", cli, err)
 	}
-	s.Connected = true
+
+	s.VideoStream, err = cli.GetImage(context.Background(), &pb.Image{Live: true})
+	if err != nil {
+		log.Fatalf("%v.GetImage(_) = _, %v", cli, err)
+	}
+
+	s.connected = true
 	log.Info("Connected")
 }
 
 // Close tries to close service connection if it exists.
 func (s *Service) Close() {
-	if s.Connected {
+	if s.connected {
 		s.conn.Close()
+		s.connected = false
 	}
 }

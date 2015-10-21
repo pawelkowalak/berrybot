@@ -10,7 +10,9 @@ It is generated from these files:
 
 It has these top-level messages:
 	Direction
-	DirectionReply
+	DriveReply
+	Image
+	ImageBytes
 */
 package steering
 
@@ -38,13 +40,29 @@ func (m *Direction) Reset()         { *m = Direction{} }
 func (m *Direction) String() string { return proto.CompactTextString(m) }
 func (*Direction) ProtoMessage()    {}
 
-type DirectionReply struct {
+type DriveReply struct {
 	Ok bool `protobuf:"varint,1,opt,name=ok" json:"ok,omitempty"`
 }
 
-func (m *DirectionReply) Reset()         { *m = DirectionReply{} }
-func (m *DirectionReply) String() string { return proto.CompactTextString(m) }
-func (*DirectionReply) ProtoMessage()    {}
+func (m *DriveReply) Reset()         { *m = DriveReply{} }
+func (m *DriveReply) String() string { return proto.CompactTextString(m) }
+func (*DriveReply) ProtoMessage()    {}
+
+type Image struct {
+	Live bool `protobuf:"varint,1,opt,name=live" json:"live,omitempty"`
+}
+
+func (m *Image) Reset()         { *m = Image{} }
+func (m *Image) String() string { return proto.CompactTextString(m) }
+func (*Image) ProtoMessage()    {}
+
+type ImageBytes struct {
+	Image []byte `protobuf:"bytes,1,opt,name=image,proto3" json:"image,omitempty"`
+}
+
+func (m *ImageBytes) Reset()         { *m = ImageBytes{} }
+func (m *ImageBytes) String() string { return proto.CompactTextString(m) }
+func (*ImageBytes) ProtoMessage()    {}
 
 // Reference imports to suppress errors if they are not otherwise used.
 var _ context.Context
@@ -55,6 +73,7 @@ var _ grpc.ClientConn
 type DriverClient interface {
 	// Drive is a client-to-server stream providing direction.
 	Drive(ctx context.Context, opts ...grpc.CallOption) (Driver_DriveClient, error)
+	GetImage(ctx context.Context, in *Image, opts ...grpc.CallOption) (Driver_GetImageClient, error)
 }
 
 type driverClient struct {
@@ -76,7 +95,7 @@ func (c *driverClient) Drive(ctx context.Context, opts ...grpc.CallOption) (Driv
 
 type Driver_DriveClient interface {
 	Send(*Direction) error
-	CloseAndRecv() (*DirectionReply, error)
+	CloseAndRecv() (*DriveReply, error)
 	grpc.ClientStream
 }
 
@@ -88,11 +107,43 @@ func (x *driverDriveClient) Send(m *Direction) error {
 	return x.ClientStream.SendMsg(m)
 }
 
-func (x *driverDriveClient) CloseAndRecv() (*DirectionReply, error) {
+func (x *driverDriveClient) CloseAndRecv() (*DriveReply, error) {
 	if err := x.ClientStream.CloseSend(); err != nil {
 		return nil, err
 	}
-	m := new(DirectionReply)
+	m := new(DriveReply)
+	if err := x.ClientStream.RecvMsg(m); err != nil {
+		return nil, err
+	}
+	return m, nil
+}
+
+func (c *driverClient) GetImage(ctx context.Context, in *Image, opts ...grpc.CallOption) (Driver_GetImageClient, error) {
+	stream, err := grpc.NewClientStream(ctx, &_Driver_serviceDesc.Streams[1], c.cc, "/steering.Driver/GetImage", opts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &driverGetImageClient{stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+type Driver_GetImageClient interface {
+	Recv() (*ImageBytes, error)
+	grpc.ClientStream
+}
+
+type driverGetImageClient struct {
+	grpc.ClientStream
+}
+
+func (x *driverGetImageClient) Recv() (*ImageBytes, error) {
+	m := new(ImageBytes)
 	if err := x.ClientStream.RecvMsg(m); err != nil {
 		return nil, err
 	}
@@ -104,6 +155,7 @@ func (x *driverDriveClient) CloseAndRecv() (*DirectionReply, error) {
 type DriverServer interface {
 	// Drive is a client-to-server stream providing direction.
 	Drive(Driver_DriveServer) error
+	GetImage(*Image, Driver_GetImageServer) error
 }
 
 func RegisterDriverServer(s *grpc.Server, srv DriverServer) {
@@ -115,7 +167,7 @@ func _Driver_Drive_Handler(srv interface{}, stream grpc.ServerStream) error {
 }
 
 type Driver_DriveServer interface {
-	SendAndClose(*DirectionReply) error
+	SendAndClose(*DriveReply) error
 	Recv() (*Direction, error)
 	grpc.ServerStream
 }
@@ -124,7 +176,7 @@ type driverDriveServer struct {
 	grpc.ServerStream
 }
 
-func (x *driverDriveServer) SendAndClose(m *DirectionReply) error {
+func (x *driverDriveServer) SendAndClose(m *DriveReply) error {
 	return x.ServerStream.SendMsg(m)
 }
 
@@ -136,6 +188,27 @@ func (x *driverDriveServer) Recv() (*Direction, error) {
 	return m, nil
 }
 
+func _Driver_GetImage_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(Image)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(DriverServer).GetImage(m, &driverGetImageServer{stream})
+}
+
+type Driver_GetImageServer interface {
+	Send(*ImageBytes) error
+	grpc.ServerStream
+}
+
+type driverGetImageServer struct {
+	grpc.ServerStream
+}
+
+func (x *driverGetImageServer) Send(m *ImageBytes) error {
+	return x.ServerStream.SendMsg(m)
+}
+
 var _Driver_serviceDesc = grpc.ServiceDesc{
 	ServiceName: "steering.Driver",
 	HandlerType: (*DriverServer)(nil),
@@ -145,6 +218,11 @@ var _Driver_serviceDesc = grpc.ServiceDesc{
 			StreamName:    "Drive",
 			Handler:       _Driver_Drive_Handler,
 			ClientStreams: true,
+		},
+		{
+			StreamName:    "GetImage",
+			Handler:       _Driver_GetImage_Handler,
+			ServerStreams: true,
 		},
 	},
 }
