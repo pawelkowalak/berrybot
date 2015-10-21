@@ -8,36 +8,27 @@ import (
 
 	log "github.com/Sirupsen/logrus"
 	"golang.org/x/mobile/app"
-	"golang.org/x/mobile/asset"
 	"golang.org/x/mobile/event/lifecycle"
 	"golang.org/x/mobile/event/paint"
 	"golang.org/x/mobile/event/size"
 	"golang.org/x/mobile/event/touch"
-	"golang.org/x/mobile/exp/app/debug"
 	"golang.org/x/mobile/exp/f32"
-	"golang.org/x/mobile/exp/gl/glutil"
 	"golang.org/x/mobile/exp/sprite"
 	"golang.org/x/mobile/exp/sprite/clock"
-	"golang.org/x/mobile/exp/sprite/glsprite"
 	"golang.org/x/mobile/gl"
 
 	"github.com/viru/berrybot/berrycli/remote"
+	"github.com/viru/berrybot/berrycli/render"
 	pb "github.com/viru/berrybot/proto"
 )
 
 var (
-	// UI variables for scene drawing.
-	startTime = time.Now()
-	images    *glutil.Images
-	eng       sprite.Engine
-	scene     *sprite.Node
-	fps       *debug.FPS
-	touchPtX  float32
-	touchPtY  float32
+	touchPtX float32
+	touchPtY float32
 )
 
-// object is a generic 2D sprite with texture, position and size (in points).
-type object struct {
+// obj2d is a generic 2D sprite with texture, position and size (in points).
+type obj2d struct {
 	subTex        sprite.SubTex
 	width, height float32
 	posx, posy    float32
@@ -46,36 +37,55 @@ type object struct {
 
 // controller is an UI element that let's you drive Berry Bot! Duh.
 type controller struct {
-	object
-	stick object
+	obj2d
+	stick obj2d
 }
 
 // UpdateMiddle updates middle point of the stick based on current position and width.
-func (c *controller) UpdateMiddle() {
+func (c *controller) updateMiddle() {
 	c.stick.midx = c.stick.posx + c.stick.width/2
 	c.stick.midy = c.stick.posy + c.stick.height/2
 }
 
 // UpdatePosition tries to move stick inside controller based on current touch event's (x, y).
-func (c *controller) UpdatePosition() {
-	inside := ctrl.IsInside(ctrl.stick.midx, ctrl.stick.midy)
-	if touchPtX-1 > ctrl.stick.midx && (inside || ctrl.stick.midx <= ctrl.midx) {
-		ctrl.stick.posx++
-	} else if touchPtX+1 < ctrl.stick.midx && (inside || ctrl.stick.midx >= ctrl.midx) {
-		ctrl.stick.posx--
+func (c *controller) updatePosition() {
+	inside := c.isInside(c.stick.midx, c.stick.midy)
+	if touchPtX-1 > c.stick.midx && (inside || c.stick.midx <= c.midx) {
+		c.stick.posx++
+	} else if touchPtX+1 < c.stick.midx && (inside || c.stick.midx >= c.midx) {
+		c.stick.posx--
 	}
-	if touchPtY-1 > ctrl.stick.midy && (inside || ctrl.stick.midy <= ctrl.midy) {
-		ctrl.stick.posy++
-	} else if touchPtY+1 < ctrl.stick.midy && (inside || ctrl.stick.midy >= ctrl.midy) {
-		ctrl.stick.posy--
+	if touchPtY-1 > c.stick.midy && (inside || c.stick.midy <= c.midy) {
+		c.stick.posy++
+	} else if touchPtY+1 < c.stick.midy && (inside || c.stick.midy >= c.midy) {
+		c.stick.posy--
 	}
 }
 
 // IsInside checks if given (x, y) point is inside controller circle.
-func (c *controller) IsInside(x, y float32) bool {
+func (c *controller) isInside(x, y float32) bool {
 	r2 := math.Pow(float64(c.width/2-c.stick.width/2), 2)
 	d2 := math.Pow(float64(x-c.midx), 2) + math.Pow(float64(y-c.midy), 2)
 	return d2 < r2
+}
+
+func (c *controller) loadTextures(rs *render.Service) {
+	circle, err := rs.OpenTexture("circle.png")
+	if err != nil {
+		log.Fatalf("Can't load textures: %v", err)
+	}
+	c.subTex = sprite.SubTex{
+		T: circle,
+		R: image.Rect(0, 0, 320, 320),
+	}
+	stick, err := rs.OpenTexture("stick.png")
+	if err != nil {
+		log.Fatalf("Can't load textures: %v", err)
+	}
+	c.stick.subTex = sprite.SubTex{
+		T: stick,
+		R: image.Rect(0, 0, 120, 120),
+	}
 }
 
 // Size of controller and stick inside in points.
@@ -94,68 +104,63 @@ func newController() *controller {
 	return c
 }
 
-// There can be only one controller.
-var ctrl = newController()
-
+// client combines render, remote and controller services.
 type client struct {
+	render *render.Service
 	remote *remote.Service
+	ctrl   *controller
 }
 
+// newClient creates new client and its sub-services.
 func newClient() *client {
 	c := new(client)
+	c.render = render.NewService(time.Now())
 	c.remote = remote.NewService()
+	c.ctrl = newController()
 	go c.remote.Connect()
 	return c
 }
 
 func (c *client) main(a app.App) {
-	var glctx gl.Context
 	var sz size.Event
 	for e := range a.Events() {
 		switch e := a.Filter(e).(type) {
 		case lifecycle.Event:
 			switch e.Crosses(lifecycle.StageVisible) {
 			case lifecycle.CrossOn:
-				glctx, _ = e.DrawContext.(gl.Context)
-				onStart(glctx)
+				glctx, _ := e.DrawContext.(gl.Context)
+				c.render.Init(glctx)
+				c.loadScene()
 				a.Send(paint.Event{})
 			case lifecycle.CrossOff:
-				onStop(glctx)
+				c.render.Teardown()
 				c.remote.Close()
-				glctx = nil
 			}
 		case size.Event:
 			sz = e
 			switch sz.Orientation {
 			case size.OrientationPortrait:
-				ctrl.posx = (float32(sz.WidthPt) - ctrl.width) / 2
-				ctrl.posy = (float32(sz.HeightPt) - ctrl.height*1.5)
+				c.ctrl.posx = (float32(sz.WidthPt) - c.ctrl.width) / 2
+				c.ctrl.posy = (float32(sz.HeightPt) - c.ctrl.height*1.5)
 			case size.OrientationLandscape:
-				ctrl.posx = (float32(sz.WidthPt) - ctrl.width*1.5)
-				ctrl.posy = (float32(sz.HeightPt) - ctrl.height) / 2
+				c.ctrl.posx = (float32(sz.WidthPt) - c.ctrl.width*1.5)
+				c.ctrl.posy = (float32(sz.HeightPt) - c.ctrl.height) / 2
 			default:
-				ctrl.posx = (float32(sz.WidthPt) - ctrl.width) / 2
-				ctrl.posy = (float32(sz.HeightPt) - ctrl.height*1.5)
+				c.ctrl.posx = (float32(sz.WidthPt) - c.ctrl.width) / 2
+				c.ctrl.posy = (float32(sz.HeightPt) - c.ctrl.height*1.5)
 			}
-			ctrl.midx = ctrl.posx + ctrl.width/2
-			ctrl.midy = ctrl.posy + ctrl.height/2
-			ctrl.stick.posx = ctrl.midx - ctrl.stick.width/2
-			ctrl.stick.posy = ctrl.midy - ctrl.stick.height/2
-			touchPtX = ctrl.midx
-			touchPtY = ctrl.midy
+			c.ctrl.midx = c.ctrl.posx + c.ctrl.width/2
+			c.ctrl.midy = c.ctrl.posy + c.ctrl.height/2
+			c.ctrl.stick.posx = c.ctrl.midx - c.ctrl.stick.width/2
+			c.ctrl.stick.posy = c.ctrl.midy - c.ctrl.stick.height/2
+			touchPtX = c.ctrl.midx
+			touchPtY = c.ctrl.midy
 			log.WithFields(log.Fields{
-				"posx": ctrl.posx,
-				"posy": ctrl.posy,
+				"posx": c.ctrl.posx,
+				"posy": c.ctrl.posy,
 			}).Info("controller position")
 		case paint.Event:
-			if glctx == nil || e.External {
-				// As we are actively painting as fast as
-				// we can (usually 60 FPS), skip any paint
-				// events sent by the system.
-				continue
-			}
-
-			onPaint(glctx, sz)
+			c.render.Render(sz)
 			a.Publish()
 			// Drive the animation by preparing to paint the next frame
 			// after this one is shown.
@@ -170,15 +175,15 @@ func (c *client) main(a app.App) {
 			switch e.Type {
 			case touch.TypeEnd:
 				log.Info("Resetting back to middle")
-				touchPtX = ctrl.midx
-				touchPtY = ctrl.midy
+				touchPtX = c.ctrl.midx
+				touchPtY = c.ctrl.midy
 				d.Dx = 0
 				d.Dy = 0
 			default:
 				touchPtX = ptx
 				touchPtY = pty
-				d.Dx = int32(ctrl.stick.midx - ctrl.midx)
-				d.Dy = int32(ctrl.midy - ctrl.stick.midy)
+				d.Dx = int32(c.ctrl.stick.midx - c.ctrl.midx)
+				d.Dy = int32(c.ctrl.midy - c.ctrl.stick.midy)
 			}
 
 			log.WithFields(log.Fields{
@@ -199,100 +204,39 @@ func main() {
 	app.Main(c.main)
 }
 
-func onStart(glctx gl.Context) {
-	// Enable blending for alpha channel in PNG files.
-	glctx.Enable(gl.BLEND)
-	glctx.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
-	images = glutil.NewImages(glctx)
-	eng = glsprite.Engine(images)
-	loadScene()
-	fps = debug.NewFPS(images)
-}
-
-func onStop(glctx gl.Context) {
-	eng.Release()
-	fps.Release()
-	images.Release()
-}
-
-func newNode() *sprite.Node {
-	n := &sprite.Node{}
-	eng.Register(n)
-	scene.AppendChild(n)
-	return n
-}
-
-func loadScene() {
-	loadController()
-	scene = &sprite.Node{}
-	eng.Register(scene)
-	eng.SetTransform(scene, f32.Affine{
-		{1, 0, 0},
-		{0, 1, 0},
-	})
+func (c *client) loadScene() {
+	c.ctrl.loadTextures(c.render)
 
 	// Controller boundaries.
-	ctrlNode := newNode()
+	ctrlNode, err := c.render.NewNode()
+	if err != nil {
+		log.Fatalf("Can't load scene: %v", err)
+	}
 	ctrlNode.Arranger = arrangerFunc(func(eng sprite.Engine, ctrlNode *sprite.Node, t clock.Time) {
-		eng.SetSubTex(ctrlNode, ctrl.subTex)
+		eng.SetSubTex(ctrlNode, c.ctrl.subTex)
 		eng.SetTransform(ctrlNode, f32.Affine{
-			{ctrl.width, 0, ctrl.posx},
-			{0, ctrl.height, ctrl.posy},
+			{c.ctrl.width, 0, c.ctrl.posx},
+			{0, c.ctrl.height, c.ctrl.posy},
 		})
 	})
 
 	// Stick position
-	stickNode := newNode()
+	stickNode, err := c.render.NewNode()
+	if err != nil {
+		log.Fatalf("Can't load scene: %v", err)
+	}
 	stickNode.Arranger = arrangerFunc(func(eng sprite.Engine, stickNode *sprite.Node, t clock.Time) {
-		eng.SetSubTex(stickNode, ctrl.stick.subTex)
-		ctrl.UpdateMiddle()
-		ctrl.UpdatePosition()
+		eng.SetSubTex(stickNode, c.ctrl.stick.subTex)
+		c.ctrl.updateMiddle()
+		c.ctrl.updatePosition()
 		eng.SetTransform(stickNode, f32.Affine{
-			{ctrl.stick.width, 0, ctrl.stick.posx},
-			{0, ctrl.stick.height, ctrl.stick.posy},
+			{c.ctrl.stick.width, 0, c.ctrl.stick.posx},
+			{0, c.ctrl.stick.height, c.ctrl.stick.posy},
 		})
 	})
 
-}
-
-func loadTexture(name string) sprite.Texture {
-	a, err := asset.Open(name)
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer a.Close()
-
-	img, _, err := image.Decode(a)
-	if err != nil {
-		log.Fatal(err)
-	}
-	t, err := eng.LoadTexture(img)
-	if err != nil {
-		log.Fatal(err)
-	}
-	return t
-}
-
-func loadController() {
-	ctrl.subTex = sprite.SubTex{
-		T: loadTexture("circle.png"),
-		R: image.Rect(0, 0, 320, 320),
-	}
-	ctrl.stick.subTex = sprite.SubTex{
-		T: loadTexture("stick.png"),
-		R: image.Rect(0, 0, 120, 120),
-	}
 }
 
 type arrangerFunc func(e sprite.Engine, n *sprite.Node, t clock.Time)
 
 func (a arrangerFunc) Arrange(e sprite.Engine, n *sprite.Node, t clock.Time) { a(e, n, t) }
-
-func onPaint(glctx gl.Context, sz size.Event) {
-	// Fill background with white.
-	glctx.ClearColor(0, 0, 0, 1)
-	glctx.Clear(gl.COLOR_BUFFER_BIT)
-	now := clock.Time(time.Since(startTime) * 60 / time.Second)
-	eng.Render(scene, now, sz)
-	fps.Draw(sz)
-}
