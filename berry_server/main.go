@@ -127,10 +127,10 @@ func main() {
 	}
 
 	go func() {
-		log.Infof("Starting to broadcast our port %s on %s", grpcPort, broadcastAddr)
+		log.Infof("Starting to broadcast our port %s on %s", *grpcPort, broadcastAddr)
 		for {
 			if _, err := c.WriteTo([]byte(*grpcPort), dst); err != nil {
-				log.Fatal(err)
+				log.Warn(err)
 			}
 			time.Sleep(time.Second)
 		}
