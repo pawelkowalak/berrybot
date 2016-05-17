@@ -82,6 +82,19 @@ func (e *echo) close() {
 	e.trig.Close()
 }
 
+const (
+	sensorUnknown = iota
+	sensorFront
+	sensorRear
+)
+
+func (s *server) Measure(sensor *pb.Sensor, stream pb.Telemetry_MeasureServer) error {
+	if sensor.Id == sensorFront {
+		stream.Send(*steering.Distance)
+	}
+	return nil
+}
+
 func (s *server) Drive(stream pb.Driver_DriveServer) error {
 	leftOn, err := embd.NewDigitalPin(23)
 	if err != nil {
@@ -243,6 +256,7 @@ func main() {
 	srv := server{echoFront: front, echoRear: rear}
 	s := grpc.NewServer()
 	pb.RegisterDriverServer(s, &srv)
+	pb.RegisterTelemetryServer(s, &srv)
 
 	// Open broadcast connection.
 	c, err := net.ListenPacket("udp", ":0")

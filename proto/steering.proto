@@ -5,8 +5,8 @@ package steering;
 // The driving service definition.
 service Driver {
   // Drive is a client-to-server stream providing direction.
-  rpc Drive(stream Direction) returns (DriveReply) {}
-  rpc GetImage(Image) returns (stream ImageBytes) {}
+  rpc Drive(stream Direction) returns (stream Telemetry) {}
+  // rpc GetImage(Image) returns (stream ImageBytes) {}
   // rpc GetVideo(Video) returns (stream VideoBytes) {}
 }
 
@@ -16,14 +16,16 @@ message Direction {
   int32 dy = 2;
 }
 
-message DriveReply {
-  bool ok = 1;
+message Telemetry {
+  int32 speed = 1;
+  int32 distFront = 2;
+  int32 distRear = 3;
 }
 
-message Image {
-  bool live = 1;
-}
-
-message ImageBytes {
-  bytes image = 1;
-}
+// message Image {
+//   bool live = 1;
+// }
+//
+// message ImageBytes {
+//   bytes image = 1;
+// }
