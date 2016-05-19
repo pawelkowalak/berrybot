@@ -4,7 +4,9 @@ import (
 	"flag"
 	"fmt"
 	"net"
-	// "os/exec"
+	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	log "github.com/Sirupsen/logrus"
@@ -86,68 +88,73 @@ type driver struct {
 	left, right *engine
 }
 
-func (d *driver) drive(dir *pb.Direction) {
+const (
+	safeStraightDist = 10
+	safeTurningDist  = 5
+)
+
+func (s *server) drive(dir *pb.Direction) {
 	switch {
-	// Full stop.
 	case dir.Dy > -5 && dir.Dy < 5 && dir.Dx > -5 && dir.Dx < 5:
-		d.left.pwr.Write(embd.Low)
-		d.right.pwr.Write(embd.Low)
+		// Full stop.
+		s.driver.left.pwr.Write(embd.Low)
+		s.driver.right.pwr.Write(embd.Low)
 		log.Info("driver STOP")
-	// Forward.
-	case dir.Dy > 5 && dir.Dx > -5 && dir.Dx < 5:
-		d.left.pwr.Write(embd.High)
-		d.left.fwd.Write(embd.High)
-		d.right.pwr.Write(embd.High)
-		d.right.fwd.Write(embd.High)
+	case dir.Dy > 5 && dir.Dx > -5 && dir.Dx < 5 && s.front.dist > safeStraightDist:
+		// Forward.
+		s.driver.left.pwr.Write(embd.High)
+		s.driver.left.fwd.Write(embd.High)
+		s.driver.right.pwr.Write(embd.High)
+		s.driver.right.fwd.Write(embd.High)
 		log.Info("driver FWD")
-	// Backward.
-	case dir.Dy < -5 && dir.Dx > -5 && dir.Dx < 5:
-		d.left.pwr.Write(embd.High)
-		d.left.fwd.Write(embd.Low)
-		d.right.pwr.Write(embd.High)
-		d.right.fwd.Write(embd.Low)
+	case dir.Dy < -5 && dir.Dx > -5 && dir.Dx < 5 && s.rear.dist > safeStraightDist:
+		// Backward.
+		s.driver.left.pwr.Write(embd.High)
+		s.driver.left.fwd.Write(embd.Low)
+		s.driver.right.pwr.Write(embd.High)
+		s.driver.right.fwd.Write(embd.Low)
 		log.Info("driver BACK")
-	// Sharp right.
 	case dir.Dx > 5 && dir.Dy > -5 && dir.Dy < 5:
-		d.left.pwr.Write(embd.High)
-		d.left.fwd.Write(embd.High)
-		d.right.pwr.Write(embd.High)
-		d.right.fwd.Write(embd.Low)
+		// Sharp right.
+		s.driver.left.pwr.Write(embd.High)
+		s.driver.left.fwd.Write(embd.High)
+		s.driver.right.pwr.Write(embd.High)
+		s.driver.right.fwd.Write(embd.Low)
 		log.Info("driver TURN RIGHT")
-	// Sharp left.
 	case dir.Dx < -5 && dir.Dy > -5 && dir.Dy < 5:
-		d.left.pwr.Write(embd.High)
-		d.left.fwd.Write(embd.Low)
-		d.right.pwr.Write(embd.High)
-		d.right.fwd.Write(embd.High)
+		// Sharp left.
+		s.driver.left.pwr.Write(embd.High)
+		s.driver.left.fwd.Write(embd.Low)
+		s.driver.right.pwr.Write(embd.High)
+		s.driver.right.fwd.Write(embd.High)
 		log.Info("driver TURN LEFT")
-	// Forward + right.
-	case dir.Dx > 5 && dir.Dy > 5:
-		d.left.pwr.Write(embd.High)
-		d.left.fwd.Write(embd.High)
-		d.right.pwr.Write(embd.Low)
-		d.right.fwd.Write(embd.High)
+	case dir.Dx > 5 && dir.Dy > 5 && s.front.dist > safeTurningDist:
+		// Forward + right.
+		s.driver.left.pwr.Write(embd.High)
+		s.driver.left.fwd.Write(embd.High)
+		s.driver.right.pwr.Write(embd.Low)
+		s.driver.right.fwd.Write(embd.High)
 		log.Info("driver FWD RIGHT")
-	// Forward + left.
-	case dir.Dx < -5 && dir.Dy > 5:
-		d.left.pwr.Write(embd.Low)
-		d.left.fwd.Write(embd.High)
-		d.right.pwr.Write(embd.High)
-		d.right.fwd.Write(embd.High)
+	case dir.Dx < -5 && dir.Dy > 5 && s.front.dist > safeTurningDist:
+		// Forward + left.
+		s.driver.left.pwr.Write(embd.Low)
+		s.driver.left.fwd.Write(embd.High)
+		s.driver.right.pwr.Write(embd.High)
+		s.driver.right.fwd.Write(embd.High)
 		log.Info("driver FWD LEFT")
-	// Backward + right.
-	case dir.Dx > 5 && dir.Dy < -5:
-		d.left.pwr.Write(embd.High)
-		d.left.fwd.Write(embd.Low)
-		d.right.pwr.Write(embd.Low)
-		d.right.fwd.Write(embd.Low)
+	case dir.Dx > 5 && dir.Dy < -5 && s.rear.dist > safeTurningDist:
+		// Backward + right.
+		s.driver.left.pwr.Write(embd.High)
+		s.driver.left.fwd.Write(embd.Low)
+		s.driver.right.pwr.Write(embd.Low)
+		s.driver.right.fwd.Write(embd.Low)
 		log.Info("driver BACK RIGHT")
-	// Backward + left.
-	case dir.Dx < -5 && dir.Dy < -5:
-		d.left.pwr.Write(embd.Low)
-		d.left.fwd.Write(embd.Low)
-		d.right.pwr.Write(embd.High)
-		d.right.fwd.Write(embd.Low)
+	case dir.Dx < -5 && dir.Dy < -5 && s.rear.dist > safeTurningDist:
+		// Backward + left.
+		s.driver.left.pwr.Write(embd.Low)
+		s.driver.left.fwd.Write(embd.Low)
+		s.driver.right.pwr.Write(embd.High)
+		s.driver.right.fwd.Write(embd.Low)
 		log.Info("driver BACK LEFT")
 	}
 }
@@ -203,14 +210,14 @@ func (s *server) Drive(stream pb.Driver_DriveServer) error {
 				"dx": d.Dx,
 				"dy": d.Dy,
 			}).Info("Direction")
-			s.driver.drive(d)
+			s.drive(d)
 		}
 	}()
 
 	for {
 		select {
 		case <-time.After(time.Second):
-			if err := stream.Send(&pb.Telemetry{Speed: 1, DistFront: 10, DistRear: 20}); err != nil {
+			if err := stream.Send(&pb.Telemetry{Speed: 1, DistFront: int32(s.front.dist), DistRear: int32(s.rear.dist)}); err != nil {
 				log.Errorf("can't send telemetry: %v", err)
 				return err
 			}
@@ -222,28 +229,6 @@ func (s *server) Drive(stream pb.Driver_DriveServer) error {
 	}
 
 }
-
-// func (s *server) GetImage(image *pb.Image, stream pb.Driver_GetImageServer) error {
-// 	if image.Live {
-// 		for {
-// 			out, err := exec.Command("/bin/cat", "/home/pi/space.jpg").Output() // FIXME: needs memprofiling
-// 			//			out, err := exec.Command("/usr/bin/raspistill", "-n", "-t", "100", "-o", "-").Output() // FIXME: needs memprofiling
-// 			if err != nil {
-// 				log.Fatal(err)
-// 			}
-// 			b := pb.ImageBytes{}
-// 			b.Image = out
-// 			log.Infof("sending %d bytes", len(b.Image))
-// 			if err := stream.Send(&b); err != nil {
-// 				e := fmt.Errorf("can't send image: %+v", err)
-// 				log.Warning(e)
-// 				return e
-// 			}
-// 			time.Sleep(time.Second)
-// 		}
-// 	}
-// 	return nil
-// }
 
 var grpcPort = flag.String("grpc-port", "31337", "gRPC listen port")
 
@@ -290,14 +275,13 @@ func main() {
 	srv := server{front: front, rear: rear, driver: driver{left: left, right: right}}
 	s := grpc.NewServer()
 	pb.RegisterDriverServer(s, &srv)
-	// pb.RegisterTelemetryServer(s, &srv)
 
 	// Open broadcast connection.
-	c, err := net.ListenPacket("udp", ":0")
+	bcast, err := net.ListenPacket("udp", ":0")
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer c.Close()
+	defer bcast.Close()
 
 	broadcastAddr := "255.255.255.255:8032"
 	dst, err := net.ResolveUDPAddr("udp", broadcastAddr)
@@ -308,11 +292,26 @@ func main() {
 	go func() {
 		log.Infof("Starting to broadcast our port %s on %s", *grpcPort, broadcastAddr)
 		for {
-			if _, err := c.WriteTo([]byte(*grpcPort), dst); err != nil {
+			if _, err := bcast.WriteTo([]byte(*grpcPort), dst); err != nil {
 				log.Warn(err)
 			}
 			time.Sleep(time.Second)
 		}
+	}()
+
+	c := make(chan os.Signal, 1)
+	signal.Notify(c, syscall.SIGTERM, syscall.SIGINT)
+	go func() {
+		sig := <-c
+		log.Infof("Got %s, trying to shutdown gracefully", sig.String())
+		front.close()
+		rear.close()
+		left.close()
+		right.close()
+		embd.CloseGPIO()
+		lis.Close()
+		bcast.Close()
+		os.Exit(0)
 	}()
 
 	// Start serving GRPC.
