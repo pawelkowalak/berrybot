@@ -3,9 +3,8 @@ package main
 import (
 	"flag"
 	"fmt"
-	"io"
 	"net"
-	"os/exec"
+	// "os/exec"
 	"time"
 
 	log "github.com/Sirupsen/logrus"
@@ -18,7 +17,8 @@ import (
 
 // server is used to implement hellowrld.GreeterServer.
 type server struct {
-	echoFront, echoRear *echo
+	front, rear *echo
+	driver      driver
 }
 
 type echo struct {
@@ -82,145 +82,168 @@ func (e *echo) close() {
 	e.trig.Close()
 }
 
+type driver struct {
+	left, right *engine
+}
+
+func (d *driver) drive(dir *pb.Direction) {
+	switch {
+	// Full stop.
+	case dir.Dy > -5 && dir.Dy < 5 && dir.Dx > -5 && dir.Dx < 5:
+		d.left.pwr.Write(embd.Low)
+		d.right.pwr.Write(embd.Low)
+		log.Info("driver STOP")
+	// Forward.
+	case dir.Dy > 5 && dir.Dx > -5 && dir.Dx < 5:
+		d.left.pwr.Write(embd.High)
+		d.left.fwd.Write(embd.High)
+		d.right.pwr.Write(embd.High)
+		d.right.fwd.Write(embd.High)
+		log.Info("driver FWD")
+	// Backward.
+	case dir.Dy < -5 && dir.Dx > -5 && dir.Dx < 5:
+		d.left.pwr.Write(embd.High)
+		d.left.fwd.Write(embd.Low)
+		d.right.pwr.Write(embd.High)
+		d.right.fwd.Write(embd.Low)
+		log.Info("driver BACK")
+	// Sharp right.
+	case dir.Dx > 5 && dir.Dy > -5 && dir.Dy < 5:
+		d.left.pwr.Write(embd.High)
+		d.left.fwd.Write(embd.High)
+		d.right.pwr.Write(embd.High)
+		d.right.fwd.Write(embd.Low)
+		log.Info("driver TURN RIGHT")
+	// Sharp left.
+	case dir.Dx < -5 && dir.Dy > -5 && dir.Dy < 5:
+		d.left.pwr.Write(embd.High)
+		d.left.fwd.Write(embd.Low)
+		d.right.pwr.Write(embd.High)
+		d.right.fwd.Write(embd.High)
+		log.Info("driver TURN LEFT")
+	// Forward + right.
+	case dir.Dx > 5 && dir.Dy > 5:
+		d.left.pwr.Write(embd.High)
+		d.left.fwd.Write(embd.High)
+		d.right.pwr.Write(embd.Low)
+		d.right.fwd.Write(embd.High)
+		log.Info("driver FWD RIGHT")
+	// Forward + left.
+	case dir.Dx < -5 && dir.Dy > 5:
+		d.left.pwr.Write(embd.Low)
+		d.left.fwd.Write(embd.High)
+		d.right.pwr.Write(embd.High)
+		d.right.fwd.Write(embd.High)
+		log.Info("driver FWD LEFT")
+	// Backward + right.
+	case dir.Dx > 5 && dir.Dy < -5:
+		d.left.pwr.Write(embd.High)
+		d.left.fwd.Write(embd.Low)
+		d.right.pwr.Write(embd.Low)
+		d.right.fwd.Write(embd.Low)
+		log.Info("driver BACK RIGHT")
+	// Backward + left.
+	case dir.Dx < -5 && dir.Dy < -5:
+		d.left.pwr.Write(embd.Low)
+		d.left.fwd.Write(embd.Low)
+		d.right.pwr.Write(embd.High)
+		d.right.fwd.Write(embd.Low)
+		log.Info("driver BACK LEFT")
+	}
+}
+
+type engine struct {
+	fwd, pwr embd.DigitalPin
+}
+
+func newEngine(pwrPin, fwdPin int) (*engine, error) {
+	var e engine
+	var err error
+	e.pwr, err = embd.NewDigitalPin(pwrPin)
+	if err != nil {
+		return nil, fmt.Errorf("can't init power pin: %v", err)
+	}
+	e.fwd, err = embd.NewDigitalPin(fwdPin)
+	if err != nil {
+		return nil, fmt.Errorf("can't init forward pin: %v", err)
+	}
+
+	// Set direction.
+	if err := e.pwr.SetDirection(embd.Out); err != nil {
+		return nil, fmt.Errorf("can't set power direction: %v", err)
+	}
+	if err := e.fwd.SetDirection(embd.Out); err != nil {
+		return nil, fmt.Errorf("can't set forward direction: %v", err)
+	}
+	return &e, nil
+}
+
+func (e *engine) close() {
+	e.pwr.Close()
+	e.fwd.Close()
+}
+
 const (
 	sensorUnknown = iota
 	sensorFront
 	sensorRear
 )
 
-func (s *server) Measure(sensor *pb.Sensor, stream pb.Telemetry_MeasureServer) error {
-	if sensor.Id == sensorFront {
-		stream.Send(*steering.Distance)
-	}
-	return nil
-}
-
 func (s *server) Drive(stream pb.Driver_DriveServer) error {
-	leftOn, err := embd.NewDigitalPin(23)
-	if err != nil {
-		log.Fatalf("Can't init trigger pin: %v", err)
-	}
-	defer leftOn.Close()
-	leftFwd, err := embd.NewDigitalPin(4)
-	if err != nil {
-		log.Fatalf("Can't init trigger pin: %v", err)
-	}
-	defer leftFwd.Close()
-	rightOn, err := embd.NewDigitalPin(24)
-	if err != nil {
-		log.Fatalf("Can't init trigger pin: %v", err)
-	}
-	defer rightOn.Close()
-	rightFwd, err := embd.NewDigitalPin(17)
-	if err != nil {
-		log.Fatalf("Can't init trigger pin: %v", err)
-	}
-	defer rightFwd.Close()
-	if err := leftOn.SetDirection(embd.Out); err != nil {
-		log.Fatalf("Can't init trigger pin: %v", err)
-	}
-	if err := leftFwd.SetDirection(embd.Out); err != nil {
-		log.Fatalf("Can't init trigger pin: %v", err)
-	}
-	if err := rightOn.SetDirection(embd.Out); err != nil {
-		log.Fatalf("Can't init trigger pin: %v", err)
-	}
-	if err := rightFwd.SetDirection(embd.Out); err != nil {
-		log.Fatalf("Can't init trigger pin: %v", err)
-	}
+	waitc := make(chan struct{})
+	go func() {
+		for {
+			d, err := stream.Recv()
+			if err != nil {
+				log.Warnf("ERR from client: %v", err)
+				close(waitc)
+				return
+			}
+			log.WithFields(log.Fields{
+				"dx": d.Dx,
+				"dy": d.Dy,
+			}).Info("Direction")
+			s.driver.drive(d)
+		}
+	}()
 
 	for {
-		d, err := stream.Recv()
-		if err == io.EOF {
-			return stream.SendAndClose(&pb.DriveReply{
-				Ok: true,
-			})
+		select {
+		case <-time.After(time.Second):
+			if err := stream.Send(&pb.Telemetry{Speed: 1, DistFront: 10, DistRear: 20}); err != nil {
+				log.Errorf("can't send telemetry: %v", err)
+				return err
+			}
+			log.Info("Sending telemetry!")
+		case <-waitc:
+			log.Info("got ERR from client, closing sending loop")
+			return nil
 		}
-		if err != nil {
-			return err
-		}
-		log.WithFields(log.Fields{
-			"dx": d.Dx,
-			"dy": d.Dy,
-		}).Info("Direction")
-		//		switch {
-		//		// Full stop.
-		//		case d.Dy > -5 && d.Dy < 5 && d.Dx > -5 && d.Dx < 5:
-		//			leftOn.Write(embd.Low)
-		//			rightOn.Write(embd.Low)
-		//		// Forward.
-		//		case d.Dy > 5 && d.Dx > -5 && d.Dx < 5:
-		//			leftOn.Write(embd.High)
-		//			leftFwd.Write(embd.High)
-		//			rightOn.Write(embd.High)
-		//			rightFwd.Write(embd.High)
-		//		// Backward.
-		//		case d.Dy < -5 && d.Dx > -5 && d.Dx < 5:
-		//			leftOn.Write(embd.High)
-		//			leftFwd.Write(embd.Low)
-		//			rightOn.Write(embd.High)
-		//			rightFwd.Write(embd.Low)
-		//		// Sharp right.
-		//		case d.Dx > 5 && d.Dy > -5 && d.Dy < 5:
-		//			leftOn.Write(embd.High)
-		//			leftFwd.Write(embd.High)
-		//			rightOn.Write(embd.High)
-		//			rightFwd.Write(embd.Low)
-		//		// Sharp left.
-		//		case d.Dx < -5 && d.Dy > -5 && d.Dy < 5:
-		//			leftOn.Write(embd.High)
-		//			leftFwd.Write(embd.Low)
-		//			rightOn.Write(embd.High)
-		//			rightFwd.Write(embd.High)
-		//		// Forward + right.
-		//		case d.Dx > 5 && d.Dy > 5:
-		//			leftOn.Write(embd.High)
-		//			leftFwd.Write(embd.High)
-		//			rightOn.Write(embd.Low)
-		//			rightFwd.Write(embd.High)
-		//		// Forward + left.
-		//		case d.Dx < -5 && d.Dy > 5:
-		//			leftOn.Write(embd.Low)
-		//			leftFwd.Write(embd.High)
-		//			rightOn.Write(embd.High)
-		//			rightFwd.Write(embd.High)
-		//		// Backward + right.
-		//		case d.Dx > 5 && d.Dy < -5:
-		//			leftOn.Write(embd.High)
-		//			leftFwd.Write(embd.Low)
-		//			rightOn.Write(embd.Low)
-		//			rightFwd.Write(embd.Low)
-		//		// Backward + left.
-		//		case d.Dx < -5 && d.Dy < -5:
-		//			leftOn.Write(embd.Low)
-		//			leftFwd.Write(embd.Low)
-		//			rightOn.Write(embd.High)
-		//			rightFwd.Write(embd.Low)
-		//		}
 	}
+
 }
 
-func (s *server) GetImage(image *pb.Image, stream pb.Driver_GetImageServer) error {
-	if image.Live {
-		for {
-			out, err := exec.Command("/bin/cat", "/home/pi/space.jpg").Output() // FIXME: needs memprofiling
-			//			out, err := exec.Command("/usr/bin/raspistill", "-n", "-t", "100", "-o", "-").Output() // FIXME: needs memprofiling
-			if err != nil {
-				log.Fatal(err)
-			}
-			b := pb.ImageBytes{}
-			b.Image = out
-			log.Infof("sending %d bytes", len(b.Image))
-			if err := stream.Send(&b); err != nil {
-				e := fmt.Errorf("can't send image: %+v", err)
-				log.Warning(e)
-				return e
-			}
-			time.Sleep(time.Second)
-		}
-	}
-	return nil
-}
+// func (s *server) GetImage(image *pb.Image, stream pb.Driver_GetImageServer) error {
+// 	if image.Live {
+// 		for {
+// 			out, err := exec.Command("/bin/cat", "/home/pi/space.jpg").Output() // FIXME: needs memprofiling
+// 			//			out, err := exec.Command("/usr/bin/raspistill", "-n", "-t", "100", "-o", "-").Output() // FIXME: needs memprofiling
+// 			if err != nil {
+// 				log.Fatal(err)
+// 			}
+// 			b := pb.ImageBytes{}
+// 			b.Image = out
+// 			log.Infof("sending %d bytes", len(b.Image))
+// 			if err := stream.Send(&b); err != nil {
+// 				e := fmt.Errorf("can't send image: %+v", err)
+// 				log.Warning(e)
+// 				return e
+// 			}
+// 			time.Sleep(time.Second)
+// 		}
+// 	}
+// 	return nil
+// }
 
 var grpcPort = flag.String("grpc-port", "31337", "gRPC listen port")
 
@@ -246,6 +269,17 @@ func main() {
 	go front.runDistancer()
 	go rear.runDistancer()
 
+	left, err := newEngine(23, 4)
+	if err != nil {
+		log.Fatalf("Can't init left engine: %v", err)
+	}
+	defer left.close()
+	right, err := newEngine(24, 17)
+	if err != nil {
+		log.Fatalf("Can't init right engine: %v", err)
+	}
+	defer right.close()
+
 	// Listen for GRPC connections.
 	lis, err := net.Listen("tcp", ":"+*grpcPort)
 	if err != nil {
@@ -253,10 +287,10 @@ func main() {
 	}
 	defer lis.Close()
 
-	srv := server{echoFront: front, echoRear: rear}
+	srv := server{front: front, rear: rear, driver: driver{left: left, right: right}}
 	s := grpc.NewServer()
 	pb.RegisterDriverServer(s, &srv)
-	pb.RegisterTelemetryServer(s, &srv)
+	// pb.RegisterTelemetryServer(s, &srv)
 
 	// Open broadcast connection.
 	c, err := net.ListenPacket("udp", ":0")
