@@ -4,17 +4,19 @@ import (
 	"flag"
 	"fmt"
 	"net"
+	"net/http"
+	_ "net/http/pprof"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
+	pb "github.com/viru/berrybot/proto"
+
 	log "github.com/Sirupsen/logrus"
 	"github.com/kidoman/embd"
 	_ "github.com/kidoman/embd/host/rpi" // This loads the RPi driver
 	"google.golang.org/grpc"
-
-	pb "github.com/viru/berrybot/proto"
 )
 
 // server is used to implement hellowrld.GreeterServer.
@@ -24,13 +26,18 @@ type server struct {
 }
 
 type echo struct {
-	echo embd.DigitalPin
-	trig embd.DigitalPin
-	dist int64
+	name       string
+	echo       embd.DigitalPin
+	trig       embd.DigitalPin
+	quit, done chan bool
+	dist       int64
 }
 
-func newEcho(trigPin, echoPin int) (*echo, error) {
+func newEcho(name string, trigPin, echoPin int) (*echo, error) {
 	var e echo
+	e.name = name
+	e.quit = make(chan bool)
+	e.done = make(chan bool)
 	var err error
 	e.trig, err = embd.NewDigitalPin(trigPin)
 	if err != nil {
@@ -52,34 +59,39 @@ func newEcho(trigPin, echoPin int) (*echo, error) {
 }
 
 func (e *echo) runDistancer() {
+	if err := e.trig.Write(embd.Low); err != nil {
+		log.Warnf("can't set trigger to low: %v", err)
+	}
+	time.Sleep(time.Second * 1)
+	tick := time.NewTicker(time.Millisecond * 500)
+	defer tick.Stop()
 	for {
-		if err := e.trig.Write(embd.Low); err != nil {
-			log.Warnf("can't set trigger to low: %v", err)
-			continue
+		select {
+		case <-e.quit:
+			e.done <- true
+			return
+		case <-tick.C:
+			log.Infof("%s: measuring...", e.name)
+			if err := e.trig.Write(embd.High); err != nil {
+				log.Warnf("can't set trigger to high: %v", err)
+			}
+			time.Sleep(time.Microsecond * 10)
+			if err := e.trig.Write(embd.Low); err != nil {
+				log.Warnf("can't set trigger to low: %v", err)
+			}
+			dur, err := e.echo.TimePulse(embd.High)
+			if err != nil {
+				log.Warnf("can't time pulse: %v", err)
+			}
+			log.Infof("%s: distance: %dcm", e.name, dur.Nanoseconds()/1000*34/1000/2)
+			e.dist = dur.Nanoseconds() / 1000 * 34 / 1000 / 2
 		}
-		time.Sleep(time.Second * 1)
-		log.Info("measuring")
-		if err := e.trig.Write(embd.High); err != nil {
-			log.Warnf("can't set trigger to high: %v", err)
-			continue
-		}
-		time.Sleep(time.Microsecond * 10)
-		if err := e.trig.Write(embd.Low); err != nil {
-			log.Warnf("can't set trigger to low: %v", err)
-			continue
-		}
-
-		dur, err := e.echo.TimePulse(embd.High)
-		if err != nil {
-			log.Warnf("can't time pulse: %v", err)
-			continue
-		}
-		log.Infof("distance: %dcm", dur.Nanoseconds()/1000*34/1000/2)
-		e.dist = dur.Nanoseconds() / 1000 * 34 / 1000 / 2
 	}
 }
 
 func (e *echo) close() {
+	e.quit <- true
+	<-e.done
 	e.echo.Close()
 	e.trig.Close()
 }
@@ -235,18 +247,20 @@ var grpcPort = flag.String("grpc-port", "31337", "gRPC listen port")
 func main() {
 	flag.Parse()
 
+	go http.ListenAndServe(":9191", nil)
+
 	// Initialize GPIO.
 	var err error
 	if err = embd.InitGPIO(); err != nil {
 		log.Fatalf("Can't init GPIO: %v", err)
 	}
 	defer embd.CloseGPIO()
-	front, err := newEcho(9, 10)
+	front, err := newEcho("front", 9, 10)
 	if err != nil {
 		log.Fatalf("Can't init front echo: %v", err)
 	}
 	defer front.close()
-	rear, err := newEcho(19, 20)
+	rear, err := newEcho("rear", 19, 20)
 	if err != nil {
 		log.Fatalf("Can't init rear echo: %v", err)
 	}
