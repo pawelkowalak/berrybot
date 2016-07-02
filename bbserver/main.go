@@ -23,6 +23,7 @@ import (
 type server struct {
 	front, rear *echo
 	driver      driver
+	shutdown    bool
 }
 
 type echo struct {
@@ -31,6 +32,7 @@ type echo struct {
 	trig       embd.DigitalPin
 	quit, done chan bool
 	dist       int64
+	last       time.Time
 }
 
 func newEcho(name string, trigPin, echoPin int) (*echo, error) {
@@ -98,34 +100,70 @@ func (e *echo) close() {
 
 type driver struct {
 	left, right *engine
+	last        time.Time
+}
+
+func (d *driver) safetyStop() {
+	ticker := time.NewTicker(time.Second)
+	for range ticker.C {
+		if d.last.Add(time.Second).Before(time.Now()) {
+			log.Warn("Stopping driver!")
+			d.stop()
+		}
+	}
+}
+
+func (d *driver) stop() {
+	d.left.pwr.Write(embd.Low)
+	d.right.pwr.Write(embd.Low)
+	log.Info("driver STOP")
+}
+
+func (d *driver) forward() {
+	d.left.pwr.Write(embd.High)
+	d.left.fwd.Write(embd.High)
+	d.right.pwr.Write(embd.High)
+	d.right.fwd.Write(embd.High)
+	d.last = time.Now()
+	log.Info("driver FWD")
+}
+
+func (d *driver) backward() {
+	d.left.pwr.Write(embd.High)
+	d.left.fwd.Write(embd.Low)
+	d.right.pwr.Write(embd.High)
+	d.right.fwd.Write(embd.Low)
+	d.last = time.Now()
+	// log.Info("driver BACK")
 }
 
 const (
-	safeStraightDist = 10
-	safeTurningDist  = 5
+	safeStraightDist = 20
+	safeTurningDist  = 10
 )
 
 func (s *server) drive(dir *pb.Direction) {
 	switch {
 	case dir.Dy > -5 && dir.Dy < 5 && dir.Dx > -5 && dir.Dx < 5:
 		// Full stop.
-		s.driver.left.pwr.Write(embd.Low)
-		s.driver.right.pwr.Write(embd.Low)
-		log.Info("driver STOP")
-	case dir.Dy > 5 && dir.Dx > -5 && dir.Dx < 5 && s.front.dist > safeStraightDist:
+		s.driver.stop()
+	case dir.Dy > 5 && dir.Dx > -5 && dir.Dx < 5:
 		// Forward.
-		s.driver.left.pwr.Write(embd.High)
-		s.driver.left.fwd.Write(embd.High)
-		s.driver.right.pwr.Write(embd.High)
-		s.driver.right.fwd.Write(embd.High)
-		log.Info("driver FWD")
-	case dir.Dy < -5 && dir.Dx > -5 && dir.Dx < 5 && s.rear.dist > safeStraightDist:
+		s.front.measure()
+		if s.front.dist < safeStraightDist {
+			s.driver.stop()
+			return
+		}
+		s.driver.forward()
+	case dir.Dy < -5 && dir.Dx > -5 && dir.Dx < 5:
 		// Backward.
-		s.driver.left.pwr.Write(embd.High)
-		s.driver.left.fwd.Write(embd.Low)
-		s.driver.right.pwr.Write(embd.High)
-		s.driver.right.fwd.Write(embd.Low)
-		log.Info("driver BACK")
+		s.rear.measure()
+		if s.rear.dist < safeStraightDist {
+			s.driver.stop()
+			return
+		}
+		s.driver.backward()
+
 	case dir.Dx > 5 && dir.Dy > -5 && dir.Dy < 5:
 		// Sharp right.
 		s.driver.left.pwr.Write(embd.High)
@@ -140,28 +178,28 @@ func (s *server) drive(dir *pb.Direction) {
 		s.driver.right.pwr.Write(embd.High)
 		s.driver.right.fwd.Write(embd.High)
 		log.Info("driver TURN LEFT")
-	case dir.Dx > 5 && dir.Dy > 5 && s.front.dist > safeTurningDist:
+	case dir.Dx > 5 && dir.Dy > 5:
 		// Forward + right.
 		s.driver.left.pwr.Write(embd.High)
 		s.driver.left.fwd.Write(embd.High)
 		s.driver.right.pwr.Write(embd.Low)
 		s.driver.right.fwd.Write(embd.High)
 		log.Info("driver FWD RIGHT")
-	case dir.Dx < -5 && dir.Dy > 5 && s.front.dist > safeTurningDist:
+	case dir.Dx < -5 && dir.Dy > 5:
 		// Forward + left.
 		s.driver.left.pwr.Write(embd.Low)
 		s.driver.left.fwd.Write(embd.High)
 		s.driver.right.pwr.Write(embd.High)
 		s.driver.right.fwd.Write(embd.High)
 		log.Info("driver FWD LEFT")
-	case dir.Dx > 5 && dir.Dy < -5 && s.rear.dist > safeTurningDist:
+	case dir.Dx > 5 && dir.Dy < -5:
 		// Backward + right.
 		s.driver.left.pwr.Write(embd.High)
 		s.driver.left.fwd.Write(embd.Low)
 		s.driver.right.pwr.Write(embd.Low)
 		s.driver.right.fwd.Write(embd.Low)
 		log.Info("driver BACK RIGHT")
-	case dir.Dx < -5 && dir.Dy < -5 && s.rear.dist > safeTurningDist:
+	case dir.Dx < -5 && dir.Dy < -5:
 		// Backward + left.
 		s.driver.left.pwr.Write(embd.Low)
 		s.driver.left.fwd.Write(embd.Low)
@@ -218,17 +256,17 @@ func (s *server) Drive(stream pb.Driver_DriveServer) error {
 				close(waitc)
 				return
 			}
-			log.WithFields(log.Fields{
-				"dx": d.Dx,
-				"dy": d.Dy,
-			}).Info("Direction")
+			// log.WithFields(log.Fields{
+			// 	"dx": d.Dx,
+			// 	"dy": d.Dy,
+			// }).Info("Direction")
 			s.drive(d)
 		}
 	}()
 
 	for {
 		select {
-		case <-time.After(time.Second):
+		case <-time.After(time.Minute):
 			if err := stream.Send(&pb.Telemetry{Speed: 1, DistFront: int32(s.front.dist), DistRear: int32(s.rear.dist)}); err != nil {
 				log.Errorf("can't send telemetry: %v", err)
 				return err
@@ -239,7 +277,6 @@ func (s *server) Drive(stream pb.Driver_DriveServer) error {
 			return nil
 		}
 	}
-
 }
 
 var grpcPort = flag.String("grpc-port", "31337", "gRPC listen port")
@@ -286,7 +323,10 @@ func main() {
 	}
 	defer lis.Close()
 
-	srv := server{front: front, rear: rear, driver: driver{left: left, right: right}}
+	drv := driver{left: left, right: right}
+	go drv.safetyStop()
+
+	srv := server{front: front, rear: rear, driver: drv}
 	s := grpc.NewServer()
 	pb.RegisterDriverServer(s, &srv)
 
@@ -318,6 +358,7 @@ func main() {
 	go func() {
 		sig := <-c
 		log.Infof("Got %s, trying to shutdown gracefully", sig.String())
+		srv.shutdown = true
 		front.close()
 		rear.close()
 		left.close()
