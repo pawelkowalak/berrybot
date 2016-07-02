@@ -70,9 +70,9 @@ var (
 func onStart(glctx gl.Context, sz size.Event) {
 	images = glutil.NewImages(glctx)
 	eng = glsprite.Engine(images)
+	log = gmlog.New(images, 5)
 	bbot = NewApp()
 	bbot.Reset(sz)
-	log = gmlog.New(images, 5)
 	scene = bbot.Scene(eng, sz)
 }
 

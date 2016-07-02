@@ -17,6 +17,7 @@ import (
 	"golang.org/x/mobile/exp/sprite/clock"
 	"golang.org/x/net/context"
 	"google.golang.org/grpc"
+	"time"
 )
 
 // App holds an app context.
@@ -32,11 +33,38 @@ type App struct {
 		x, midx float32
 		y, midy float32
 	}
+	bot struct {
+		x, y        float32
+		front, rear struct {
+			sm, md, lg int
+		}
+	}
 }
 
 // NewApp creates new app.
 func NewApp() *App {
 	a := App{}
+
+	go func() {
+		for {
+			a.bot.front.sm = 0
+			a.bot.front.md = 0
+			a.bot.front.lg = 0
+			time.Sleep(time.Second)
+			a.bot.front.sm = 1
+			a.bot.front.md = 0
+			a.bot.front.lg = 0
+			time.Sleep(time.Second)
+			a.bot.front.sm = 2
+			a.bot.front.md = 1
+			a.bot.front.lg = 0
+			time.Sleep(time.Second)
+			a.bot.front.sm = 3
+			a.bot.front.md = 2
+			a.bot.front.lg = 1
+			time.Sleep(time.Second)
+		}
+	}()
 
 	go func() {
 		for {
@@ -105,6 +133,7 @@ func (a *App) discoverBot() {
 const (
 	ctrlSize      = 80
 	ctrlStickSize = 35
+	botSize       = 60
 )
 
 // Reset sets default positions, should be used after orientation change, etc.
@@ -113,12 +142,14 @@ func (a *App) Reset(sz size.Event) {
 		return
 	}
 	a.ctrl.x = float32(sz.WidthPt)/2 - ctrlSize/2
-	a.ctrl.y = float32(sz.HeightPt)/2 - ctrlSize/2
+	a.ctrl.y = 2*float32(sz.HeightPt)/3 - ctrlSize/2
 	a.ctrl.midx = a.ctrl.x + ctrlSize/2
 	a.ctrl.midy = a.ctrl.y + ctrlSize/2
 	a.stick.x = float32(sz.WidthPt)/2 - ctrlStickSize/2
-	a.stick.y = float32(sz.HeightPt)/2 - ctrlStickSize/2
+	a.stick.y = 2*float32(sz.HeightPt)/3 - ctrlStickSize/2
 	a.calcStickMids()
+	a.bot.x = float32(sz.WidthPt)/2 - botSize/2
+	a.bot.y = float32(sz.HeightPt)/3 - botSize/2
 }
 
 func (a *App) calcStickMids() {
@@ -207,6 +238,75 @@ func (a *App) Scene(eng sprite.Engine, sz size.Event) *sprite.Node {
 		})
 	})
 
+	// Bot.
+	newNode(func(eng sprite.Engine, n *sprite.Node, t clock.Time) {
+		eng.SetSubTex(n, texs[texBot])
+		eng.SetTransform(n, f32.Affine{
+			{botSize, 0, a.bot.x},
+			{0, botSize, a.bot.y},
+		})
+	})
+
+	// Proximity small.
+	const (
+		smSizeW = 15
+		smSizeH = 5
+	)
+	newNode(func(eng sprite.Engine, n *sprite.Node, t clock.Time) {
+		eng.SetSubTex(n, texs[texProxSmGrey+a.bot.front.sm])
+		eng.SetTransform(n, f32.Affine{
+			{smSizeW, 0, a.bot.x + botSize/2 - smSizeW/2},
+			{0, smSizeH, a.bot.y - 2*smSizeH},
+		})
+	})
+	newNode(func(eng sprite.Engine, n *sprite.Node, t clock.Time) {
+		eng.SetSubTex(n, texs[texProxSmGrey+a.bot.front.sm])
+		eng.SetTransform(n, f32.Affine{
+			{smSizeW, 0, a.bot.x + botSize/2 - smSizeW/2},
+			{0, -smSizeH, a.bot.y + botSize + 2*smSizeH},
+		})
+	})
+
+	// Proximity medium.
+	const (
+		mdSizeW = 25
+		mdSizeH = 7
+	)
+	newNode(func(eng sprite.Engine, n *sprite.Node, t clock.Time) {
+		eng.SetSubTex(n, texs[texProxMdGrey+a.bot.front.md])
+		eng.SetTransform(n, f32.Affine{
+			{mdSizeW, 0, a.bot.x + botSize/2 - mdSizeW/2},
+			{0, mdSizeH, a.bot.y - 3*mdSizeH},
+		})
+	})
+	newNode(func(eng sprite.Engine, n *sprite.Node, t clock.Time) {
+		eng.SetSubTex(n, texs[texProxMdGrey+a.bot.front.md])
+		eng.SetTransform(n, f32.Affine{
+			{mdSizeW, 0, a.bot.x + botSize/2 - mdSizeW/2},
+			{0, -mdSizeH, a.bot.y + botSize + 3*mdSizeH},
+		})
+	})
+
+	// Proximity large
+	const (
+		lgSizeW = 35
+		lgSizeH = 10
+	)
+	newNode(func(eng sprite.Engine, n *sprite.Node, t clock.Time) {
+		eng.SetSubTex(n, texs[texProxLgGrey+a.bot.front.lg])
+		eng.SetTransform(n, f32.Affine{
+			{lgSizeW, 0, a.bot.x + botSize/2 - lgSizeW/2},
+			{0, lgSizeH, a.bot.y - 3.2*lgSizeH},
+		})
+	})
+	newNode(func(eng sprite.Engine, n *sprite.Node, t clock.Time) {
+		eng.SetSubTex(n, texs[texProxLgGrey+a.bot.front.lg])
+		eng.SetTransform(n, f32.Affine{
+			{lgSizeW, 0, a.bot.x + botSize/2 - lgSizeW/2},
+			{0, -lgSizeH, a.bot.y + botSize + 3.2*lgSizeH},
+		})
+	})
+
 	return scene
 }
 
@@ -217,10 +317,20 @@ func (a arrangerFunc) Arrange(e sprite.Engine, n *sprite.Node, t clock.Time) { a
 const (
 	texCtrl = iota
 	texStick
+	texBot
+	texProxSmGrey
+	texProxSmGreen
+	texProxSmOrange
+	texProxSmRed
+	texProxMdGrey
+	texProxMdOrange
+	texProxMdRed
+	texProxLgGrey
+	texProxLgRed
 )
 
 func loadTextures(eng sprite.Engine) []sprite.SubTex {
-	a, err := asset.Open("ctrl.png")
+	a, err := asset.Open("assets.png")
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -240,7 +350,17 @@ func loadTextures(eng sprite.Engine) []sprite.SubTex {
 	// adjacent textures leaking into a given texture.
 	// See: http://stackoverflow.com/questions/19611745/opengl-black-lines-in-between-tiles
 	return []sprite.SubTex{
-		texCtrl:  sprite.SubTex{T: t, R: image.Rect(0, 0, 320, 320)},
-		texStick: sprite.SubTex{T: t, R: image.Rect(321, 0, 439, 120)},
+		texCtrl:         sprite.SubTex{T: t, R: image.Rect(0, 0, 320, 320)},
+		texStick:        sprite.SubTex{T: t, R: image.Rect(321, 0, 439, 120)},
+		texBot:          sprite.SubTex{T: t, R: image.Rect(0, 320, 300, 610)},
+		texProxSmGrey:   sprite.SubTex{T: t, R: image.Rect(300, 320, 300+50, 320+15)},
+		texProxSmGreen:  sprite.SubTex{T: t, R: image.Rect(300, 320+15, 300+50, 320+30)},
+		texProxSmOrange: sprite.SubTex{T: t, R: image.Rect(300, 320+30, 300+50, 320+45)},
+		texProxSmRed:    sprite.SubTex{T: t, R: image.Rect(300, 320+45, 300+50, 320+60)},
+		texProxMdGrey:   sprite.SubTex{T: t, R: image.Rect(300, 320+60, 300+78, 320+80)},
+		texProxMdOrange: sprite.SubTex{T: t, R: image.Rect(300, 320+80, 300+78, 320+100)},
+		texProxMdRed:    sprite.SubTex{T: t, R: image.Rect(300, 320+100, 300+78, 320+120)},
+		texProxLgGrey:   sprite.SubTex{T: t, R: image.Rect(300, 320+120, 300+110, 320+147)},
+		texProxLgRed:    sprite.SubTex{T: t, R: image.Rect(300, 320+147, 300+110, 320+174)},
 	}
 }
