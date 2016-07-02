@@ -8,6 +8,7 @@ import (
 	_ "net/http/pprof"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -22,8 +23,7 @@ import (
 // server is used to implement hellowrld.GreeterServer.
 type server struct {
 	front, rear *echo
-	driver      driver
-	shutdown    bool
+	driver      *driver
 }
 
 type echo struct {
@@ -33,6 +33,7 @@ type echo struct {
 	quit, done chan bool
 	dist       int64
 	last       time.Time
+	enabled    bool
 }
 
 func newEcho(name string, trigPin, echoPin int) (*echo, error) {
@@ -73,6 +74,9 @@ func (e *echo) runDistancer() {
 			e.done <- true
 			return
 		case <-tick.C:
+			if !e.enabled {
+				continue
+			}
 			log.Infof("%s: measuring...", e.name)
 			if err := e.trig.Write(embd.High); err != nil {
 				log.Warnf("can't set trigger to high: %v", err)
@@ -100,23 +104,36 @@ func (e *echo) close() {
 
 type driver struct {
 	left, right *engine
+	mu          sync.Mutex
+	moving      bool
 	last        time.Time
 }
 
 func (d *driver) safetyStop() {
 	ticker := time.NewTicker(time.Second)
 	for range ticker.C {
-		if d.last.Add(time.Second).Before(time.Now()) {
-			log.Warn("Stopping driver!")
+		d.mu.Lock()
+		if d.moving && d.last.Add(time.Second).Before(time.Now()) {
+			d.mu.Unlock()
 			d.stop()
+			log.Warn("Emergency stop!")
+			continue
 		}
+		d.mu.Unlock()
 	}
+}
+
+func (d *driver) setMoving(moving bool) {
+	d.mu.Lock()
+	d.last = time.Now()
+	d.moving = moving
+	d.mu.Unlock()
 }
 
 func (d *driver) stop() {
 	d.left.pwr.Write(embd.Low)
 	d.right.pwr.Write(embd.Low)
-	log.Info("driver STOP")
+	d.setMoving(false)
 }
 
 func (d *driver) forward() {
@@ -124,8 +141,7 @@ func (d *driver) forward() {
 	d.left.fwd.Write(embd.High)
 	d.right.pwr.Write(embd.High)
 	d.right.fwd.Write(embd.High)
-	d.last = time.Now()
-	log.Info("driver FWD")
+	d.setMoving(true)
 }
 
 func (d *driver) backward() {
@@ -133,8 +149,55 @@ func (d *driver) backward() {
 	d.left.fwd.Write(embd.Low)
 	d.right.pwr.Write(embd.High)
 	d.right.fwd.Write(embd.Low)
-	d.last = time.Now()
-	// log.Info("driver BACK")
+	d.setMoving(true)
+}
+
+func (d *driver) sharpRight() {
+	d.left.pwr.Write(embd.High)
+	d.left.fwd.Write(embd.High)
+	d.right.pwr.Write(embd.High)
+	d.right.fwd.Write(embd.Low)
+	d.setMoving(true)
+}
+
+func (d *driver) sharpLeft() {
+	d.left.pwr.Write(embd.High)
+	d.left.fwd.Write(embd.Low)
+	d.right.pwr.Write(embd.High)
+	d.right.fwd.Write(embd.High)
+	d.setMoving(true)
+}
+
+func (d *driver) fwdRight() {
+	d.left.pwr.Write(embd.High)
+	d.left.fwd.Write(embd.High)
+	d.right.pwr.Write(embd.Low)
+	d.right.fwd.Write(embd.High)
+	d.setMoving(true)
+}
+
+func (d *driver) fwdLeft() {
+	d.left.pwr.Write(embd.Low)
+	d.left.fwd.Write(embd.High)
+	d.right.pwr.Write(embd.High)
+	d.right.fwd.Write(embd.High)
+	d.setMoving(true)
+}
+
+func (d *driver) backRight() {
+	d.left.pwr.Write(embd.High)
+	d.left.fwd.Write(embd.Low)
+	d.right.pwr.Write(embd.Low)
+	d.right.fwd.Write(embd.Low)
+	d.setMoving(true)
+}
+
+func (d *driver) backLeft() {
+	d.left.pwr.Write(embd.Low)
+	d.left.fwd.Write(embd.Low)
+	d.right.pwr.Write(embd.High)
+	d.right.fwd.Write(embd.Low)
+	d.setMoving(true)
 }
 
 const (
@@ -145,67 +208,27 @@ const (
 func (s *server) drive(dir *pb.Direction) {
 	switch {
 	case dir.Dy > -5 && dir.Dy < 5 && dir.Dx > -5 && dir.Dx < 5:
-		// Full stop.
+		s.front.enabled = false
+		s.rear.enabled = false
 		s.driver.stop()
 	case dir.Dy > 5 && dir.Dx > -5 && dir.Dx < 5:
-		// Forward.
-		s.front.measure()
-		if s.front.dist < safeStraightDist {
-			s.driver.stop()
-			return
-		}
+		s.front.enabled = true
 		s.driver.forward()
 	case dir.Dy < -5 && dir.Dx > -5 && dir.Dx < 5:
-		// Backward.
-		s.rear.measure()
-		if s.rear.dist < safeStraightDist {
-			s.driver.stop()
-			return
-		}
+		s.rear.enabled = true
 		s.driver.backward()
-
 	case dir.Dx > 5 && dir.Dy > -5 && dir.Dy < 5:
-		// Sharp right.
-		s.driver.left.pwr.Write(embd.High)
-		s.driver.left.fwd.Write(embd.High)
-		s.driver.right.pwr.Write(embd.High)
-		s.driver.right.fwd.Write(embd.Low)
-		log.Info("driver TURN RIGHT")
+		s.driver.sharpRight()
 	case dir.Dx < -5 && dir.Dy > -5 && dir.Dy < 5:
-		// Sharp left.
-		s.driver.left.pwr.Write(embd.High)
-		s.driver.left.fwd.Write(embd.Low)
-		s.driver.right.pwr.Write(embd.High)
-		s.driver.right.fwd.Write(embd.High)
-		log.Info("driver TURN LEFT")
+		s.driver.sharpLeft()
 	case dir.Dx > 5 && dir.Dy > 5:
-		// Forward + right.
-		s.driver.left.pwr.Write(embd.High)
-		s.driver.left.fwd.Write(embd.High)
-		s.driver.right.pwr.Write(embd.Low)
-		s.driver.right.fwd.Write(embd.High)
-		log.Info("driver FWD RIGHT")
+		s.driver.fwdRight()
 	case dir.Dx < -5 && dir.Dy > 5:
-		// Forward + left.
-		s.driver.left.pwr.Write(embd.Low)
-		s.driver.left.fwd.Write(embd.High)
-		s.driver.right.pwr.Write(embd.High)
-		s.driver.right.fwd.Write(embd.High)
-		log.Info("driver FWD LEFT")
+		s.driver.fwdLeft()
 	case dir.Dx > 5 && dir.Dy < -5:
-		// Backward + right.
-		s.driver.left.pwr.Write(embd.High)
-		s.driver.left.fwd.Write(embd.Low)
-		s.driver.right.pwr.Write(embd.Low)
-		s.driver.right.fwd.Write(embd.Low)
-		log.Info("driver BACK RIGHT")
+		s.driver.backRight()
 	case dir.Dx < -5 && dir.Dy < -5:
-		// Backward + left.
-		s.driver.left.pwr.Write(embd.Low)
-		s.driver.left.fwd.Write(embd.Low)
-		s.driver.right.pwr.Write(embd.High)
-		s.driver.right.fwd.Write(embd.Low)
-		log.Info("driver BACK LEFT")
+		s.driver.backLeft()
 	}
 }
 
@@ -256,17 +279,16 @@ func (s *server) Drive(stream pb.Driver_DriveServer) error {
 				close(waitc)
 				return
 			}
-			// log.WithFields(log.Fields{
-			// 	"dx": d.Dx,
-			// 	"dy": d.Dy,
-			// }).Info("Direction")
 			s.drive(d)
 		}
 	}()
 
 	for {
 		select {
-		case <-time.After(time.Minute):
+		case <-time.After(time.Second):
+			if !s.front.enabled && !s.rear.enabled {
+				continue
+			}
 			if err := stream.Send(&pb.Telemetry{Speed: 1, DistFront: int32(s.front.dist), DistRear: int32(s.rear.dist)}); err != nil {
 				log.Errorf("can't send telemetry: %v", err)
 				return err
@@ -326,7 +348,7 @@ func main() {
 	drv := driver{left: left, right: right}
 	go drv.safetyStop()
 
-	srv := server{front: front, rear: rear, driver: drv}
+	srv := server{front: front, rear: rear, driver: &drv}
 	s := grpc.NewServer()
 	pb.RegisterDriverServer(s, &srv)
 
@@ -358,7 +380,6 @@ func main() {
 	go func() {
 		sig := <-c
 		log.Infof("Got %s, trying to shutdown gracefully", sig.String())
-		srv.shutdown = true
 		front.close()
 		rear.close()
 		left.close()
