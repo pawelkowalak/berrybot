@@ -7,9 +7,9 @@ import (
 	"io"
 	"math"
 	"net"
-	"time"
 
-	log "github.com/Sirupsen/logrus"
+	pb "github.com/viru/berrybot/proto"
+
 	"golang.org/x/mobile/asset"
 	"golang.org/x/mobile/event/size"
 	"golang.org/x/mobile/exp/f32"
@@ -17,8 +17,6 @@ import (
 	"golang.org/x/mobile/exp/sprite/clock"
 	"golang.org/x/net/context"
 	"google.golang.org/grpc"
-
-	pb "github.com/viru/berrybot/proto"
 )
 
 // App holds an app context.
@@ -39,36 +37,34 @@ type App struct {
 // NewApp creates new app.
 func NewApp() *App {
 	a := App{}
-	a.discoverBot()
 
 	go func() {
 		for {
 			if !a.connected {
-				time.Sleep(1)
-			} else {
-				t, err := a.DriveStream.Recv()
-				if err == io.EOF {
-					return
-				}
-				if err != nil {
-					return
-				}
-				log.WithFields(log.Fields{
-					"speed": t.Speed,
-					"front": t.DistFront,
-					"rear":  t.DistRear,
-				}).Info("Telemetry")
+				a.discoverBot()
+				continue
 			}
+			t, err := a.DriveStream.Recv()
+			if err == io.EOF {
+				return
+			}
+			if err != nil {
+				return
+			}
+			log.Printf("speed: %v, front: %v, rear: %v", t.Speed, t.DistFront, t.DistRear)
 		}
 	}()
 	return &a
 }
 
+const defaultBcastPort = "8032"
+
 // discoverBot listens for UDP broadcasts on port 8032 and tries to connect to
 // the first server it finds. This function blocks.
 func (a *App) discoverBot() {
 	// Listen for bots on broadcast.
-	c, err := net.ListenPacket("udp", ":8032")
+	log.Printf("Listening on UDP/%s...", defaultBcastPort)
+	c, err := net.ListenPacket("udp", ":"+defaultBcastPort)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -78,7 +74,7 @@ func (a *App) discoverBot() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	log.Infof("Received port broadcast from %s", peer)
+	log.Printf("Received port broadcast from %s", peer)
 	host, _, err := net.SplitHostPort(peer.String())
 	if err != nil {
 		log.Fatalf("can't parse peer IP address %v", err)
@@ -102,7 +98,7 @@ func (a *App) discoverBot() {
 	// }
 
 	a.connected = true
-	log.Info("Connected")
+	log.Print("Connected")
 }
 
 // Size of controller and stick inside in points.
@@ -149,7 +145,7 @@ func (a *App) SetStick(sz size.Event, x, y float32) {
 		a.stick.y = yc + r*((yp-yc)/float32(math.Sqrt(d2))) - ctrlStickSize/2
 	}
 	a.calcStickMids()
-	log.Infof("new stick position: %v, %v", a.ctrl.x, a.ctrl.y)
+	log.Printf("new stick position: %v, %v", a.ctrl.x, a.ctrl.y)
 	a.SendDrive()
 }
 
@@ -161,7 +157,7 @@ func (a *App) ResetStick(sz size.Event) {
 	a.stick.x = float32(sz.WidthPt)/2 - ctrlStickSize/2
 	a.stick.y = float32(sz.HeightPt)/2 - ctrlStickSize/2
 	a.calcStickMids()
-	log.Infof("new stick rest position: %v, %v", a.stick.x, a.stick.y)
+	log.Printf("new stick rest position: %v, %v", a.stick.x, a.stick.y)
 	a.SendDrive()
 }
 
@@ -178,7 +174,7 @@ func (a *App) SendDrive() {
 }
 
 // Scene creates and returns a new app scene.
-func (a *App) Scene(eng sprite.Engine) *sprite.Node {
+func (a *App) Scene(eng sprite.Engine, sz size.Event) *sprite.Node {
 	texs := loadTextures(eng)
 	scene := &sprite.Node{}
 	eng.Register(scene)

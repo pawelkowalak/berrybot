@@ -4,6 +4,7 @@ import (
 	"math/rand"
 	"time"
 
+	"github.com/viru/gmlog"
 	"golang.org/x/mobile/app"
 	"golang.org/x/mobile/event/lifecycle"
 	"golang.org/x/mobile/event/paint"
@@ -63,6 +64,7 @@ var (
 	eng       sprite.Engine
 	scene     *sprite.Node
 	bbot      *App
+	log       *gmlog.Logger
 )
 
 func onStart(glctx gl.Context, sz size.Event) {
@@ -70,11 +72,13 @@ func onStart(glctx gl.Context, sz size.Event) {
 	eng = glsprite.Engine(images)
 	bbot = NewApp()
 	bbot.Reset(sz)
-	scene = bbot.Scene(eng)
+	log = gmlog.New(images, 5)
+	scene = bbot.Scene(eng, sz)
 }
 
 func onStop() {
 	eng.Release()
+	log.Release()
 	images.Release()
 	bbot = nil
 }
@@ -84,4 +88,5 @@ func onPaint(glctx gl.Context, sz size.Event) {
 	glctx.Clear(gl.COLOR_BUFFER_BIT)
 	now := clock.Time(time.Since(startTime) * 60 / time.Second)
 	eng.Render(scene, now, sz)
+	log.Draw(sz)
 }
