@@ -18,7 +18,7 @@ BerryBot is a simple driving robot based on Raspberry PI and DC motors. You can 
 
 * https://botland.com.pl/raspberry-pi-hat-kontrolery-silnikow-i-serw/3476-pimotor-dwukanalowy-sterownik-silnikow-nakladka-do-raspberry-pi.html
 
-**Battery pack** is needed to give enough power for DC motors. I've tried using provided chassis for AA batteries, but motors barelly moved. I'm using 1300mAh, 7.4V LiPo pack now and it lasts for 30mins of fun or few hours of idling.
+**Battery pack** is needed to give enough power for DC motors. I've tried using provided chassis for AA batteries, but motors barely moved. I'm using 1300mAh, 7.4V LiPo pack now and it lasts for 30mins of fun or few hours of idling.
 
 * https://www.sparkfun.com/products/11856
 
