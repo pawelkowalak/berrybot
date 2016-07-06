@@ -17,7 +17,6 @@ import (
 	"golang.org/x/mobile/exp/sprite/clock"
 	"golang.org/x/net/context"
 	"google.golang.org/grpc"
-	"time"
 )
 
 // App holds an app context.
@@ -35,36 +34,54 @@ type App struct {
 	}
 	bot struct {
 		x, y        float32
-		front, rear struct {
-			sm, md, lg int
-		}
+		front, rear *echo
+	}
+}
+
+type echo struct {
+	sm, md, lg int
+}
+
+func (e *echo) clear() {
+	e.sm = 0
+	e.md = 0
+	e.lg = 0
+}
+
+func (e *echo) far() {
+	e.sm = 1
+	e.md = 0
+	e.lg = 0
+}
+
+func (e *echo) mid() {
+	e.sm = 2
+	e.md = 1
+	e.lg = 0
+}
+
+func (e *echo) close() {
+	e.sm = 3
+	e.md = 2
+	e.lg = 1
+}
+
+func (e *echo) SetDist(d int32) {
+	switch {
+	case d >= 100:
+		e.far()
+	case d < 100 && d >= 50:
+		e.mid()
+	case d < 50:
+		e.close()
 	}
 }
 
 // NewApp creates new app.
 func NewApp() *App {
 	a := App{}
-
-	go func() {
-		for {
-			a.bot.front.sm = 0
-			a.bot.front.md = 0
-			a.bot.front.lg = 0
-			time.Sleep(time.Second)
-			a.bot.front.sm = 1
-			a.bot.front.md = 0
-			a.bot.front.lg = 0
-			time.Sleep(time.Second)
-			a.bot.front.sm = 2
-			a.bot.front.md = 1
-			a.bot.front.lg = 0
-			time.Sleep(time.Second)
-			a.bot.front.sm = 3
-			a.bot.front.md = 2
-			a.bot.front.lg = 1
-			time.Sleep(time.Second)
-		}
-	}()
+	a.bot.front = &echo{}
+	a.bot.rear = &echo{}
 
 	go func() {
 		for {
@@ -80,6 +97,8 @@ func NewApp() *App {
 				return
 			}
 			log.Printf("speed: %v, front: %v, rear: %v", t.Speed, t.DistFront, t.DistRear)
+			a.bot.front.SetDist(t.DistFront)
+			a.bot.rear.SetDist(t.DistRear)
 		}
 	}()
 	return &a
@@ -176,7 +195,6 @@ func (a *App) SetStick(sz size.Event, x, y float32) {
 		a.stick.y = yc + r*((yp-yc)/float32(math.Sqrt(d2))) - ctrlStickSize/2
 	}
 	a.calcStickMids()
-	log.Printf("new stick position: %v, %v", a.ctrl.x, a.ctrl.y)
 	a.SendDrive()
 }
 
@@ -186,9 +204,8 @@ func (a *App) ResetStick(sz size.Event) {
 		return
 	}
 	a.stick.x = float32(sz.WidthPt)/2 - ctrlStickSize/2
-	a.stick.y = float32(sz.HeightPt)/2 - ctrlStickSize/2
+	a.stick.y = 2*float32(sz.HeightPt)/3 - ctrlStickSize/2
 	a.calcStickMids()
-	log.Printf("new stick rest position: %v, %v", a.stick.x, a.stick.y)
 	a.SendDrive()
 }
 
@@ -260,7 +277,7 @@ func (a *App) Scene(eng sprite.Engine, sz size.Event) *sprite.Node {
 		})
 	})
 	newNode(func(eng sprite.Engine, n *sprite.Node, t clock.Time) {
-		eng.SetSubTex(n, texs[texProxSmGrey+a.bot.front.sm])
+		eng.SetSubTex(n, texs[texProxSmGrey+a.bot.rear.sm])
 		eng.SetTransform(n, f32.Affine{
 			{smSizeW, 0, a.bot.x + botSize/2 - smSizeW/2},
 			{0, -smSizeH, a.bot.y + botSize + 2*smSizeH},
@@ -280,7 +297,7 @@ func (a *App) Scene(eng sprite.Engine, sz size.Event) *sprite.Node {
 		})
 	})
 	newNode(func(eng sprite.Engine, n *sprite.Node, t clock.Time) {
-		eng.SetSubTex(n, texs[texProxMdGrey+a.bot.front.md])
+		eng.SetSubTex(n, texs[texProxMdGrey+a.bot.rear.md])
 		eng.SetTransform(n, f32.Affine{
 			{mdSizeW, 0, a.bot.x + botSize/2 - mdSizeW/2},
 			{0, -mdSizeH, a.bot.y + botSize + 3*mdSizeH},
@@ -300,7 +317,7 @@ func (a *App) Scene(eng sprite.Engine, sz size.Event) *sprite.Node {
 		})
 	})
 	newNode(func(eng sprite.Engine, n *sprite.Node, t clock.Time) {
-		eng.SetSubTex(n, texs[texProxLgGrey+a.bot.front.lg])
+		eng.SetSubTex(n, texs[texProxLgGrey+a.bot.rear.lg])
 		eng.SetTransform(n, f32.Affine{
 			{lgSizeW, 0, a.bot.x + botSize/2 - lgSizeW/2},
 			{0, -lgSizeH, a.bot.y + botSize + 3.2*lgSizeH},
