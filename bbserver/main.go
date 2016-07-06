@@ -289,7 +289,11 @@ func (s *server) Drive(stream pb.Driver_DriveServer) error {
 			if !s.front.enabled && !s.rear.enabled {
 				continue
 			}
-			if err := stream.Send(&pb.Telemetry{Speed: 1, DistFront: int32(s.front.dist), DistRear: int32(s.rear.dist)}); err != nil {
+			var speed int32
+			if s.driver.moving {
+				speed = 100
+			}
+			if err := stream.Send(&pb.Telemetry{Speed: speed, DistFront: int32(s.front.dist), DistRear: int32(s.rear.dist)}); err != nil {
 				log.Errorf("can't send telemetry: %v", err)
 				return err
 			}
