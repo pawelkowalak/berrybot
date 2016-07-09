@@ -96,7 +96,6 @@ func NewApp() *App {
 			if err != nil {
 				return
 			}
-			log.Printf("speed: %v, front: %v, rear: %v", t.Speed, t.DistFront, t.DistRear)
 			a.bot.front.SetDist(t.DistFront)
 			a.bot.rear.SetDist(t.DistRear)
 		}
@@ -176,6 +175,8 @@ func (a *App) calcStickMids() {
 	a.stick.midy = a.stick.y + ctrlStickSize/2
 }
 
+const ctrlRadius = 21
+
 // SetStick sets new position of controller stick.
 func (a *App) SetStick(sz size.Event, x, y float32) {
 	if sz.PixelsPerPt == 0 {
@@ -186,13 +187,12 @@ func (a *App) SetStick(sz size.Event, x, y float32) {
 	xc := a.ctrl.x + ctrlSize/2
 	yc := a.ctrl.y + ctrlSize/2
 	d2 := math.Pow(float64(xp-xc), 2) + math.Pow(float64(yp-yc), 2)
-	r := float32(21)
-	if d2 < float64(r*r) {
+	if d2 < float64(ctrlRadius*ctrlRadius) {
 		a.stick.x = xp - ctrlStickSize/2
 		a.stick.y = yp - ctrlStickSize/2
 	} else {
-		a.stick.x = xc + r*((xp-xc)/float32(math.Sqrt(d2))) - ctrlStickSize/2
-		a.stick.y = yc + r*((yp-yc)/float32(math.Sqrt(d2))) - ctrlStickSize/2
+		a.stick.x = xc + ctrlRadius*((xp-xc)/float32(math.Sqrt(d2))) - ctrlStickSize/2
+		a.stick.y = yc + ctrlRadius*((yp-yc)/float32(math.Sqrt(d2))) - ctrlStickSize/2
 	}
 	a.calcStickMids()
 	a.SendDrive()
@@ -211,13 +211,14 @@ func (a *App) ResetStick(sz size.Event) {
 
 // SendDrive sends drive message over gRPC.
 func (a *App) SendDrive() {
-	if a.connected {
-		d := new(pb.Direction)
-		d.Dx = int32(a.stick.midx - a.ctrl.midx)
-		d.Dy = int32(a.ctrl.midy - a.stick.midy)
-		if err := a.DriveStream.Send(d); err != nil {
-			log.Fatalf("%v.Send(%v) = %v", a.DriveStream, d, err)
-		}
+	if !a.connected {
+		return
+	}
+	d := new(pb.Direction)
+	d.Dx = int32((a.stick.midx - a.ctrl.midx) * 100 / ctrlRadius)
+	d.Dy = int32((a.ctrl.midy - a.stick.midy) * 100 / ctrlRadius)
+	if err := a.DriveStream.Send(d); err != nil {
+		log.Fatalf("%v.Send(%v) = %v", a.DriveStream, d, err)
 	}
 }
 
@@ -368,7 +369,7 @@ func loadTextures(eng sprite.Engine) []sprite.SubTex {
 	// See: http://stackoverflow.com/questions/19611745/opengl-black-lines-in-between-tiles
 	return []sprite.SubTex{
 		texCtrl:         sprite.SubTex{T: t, R: image.Rect(0, 0, 320, 320)},
-		texStick:        sprite.SubTex{T: t, R: image.Rect(321, 0, 439, 120)},
+		texStick:        sprite.SubTex{T: t, R: image.Rect(320, 0, 440, 120)},
 		texBot:          sprite.SubTex{T: t, R: image.Rect(0, 320, 300, 610)},
 		texProxSmGrey:   sprite.SubTex{T: t, R: image.Rect(300, 320, 300+50, 320+15)},
 		texProxSmGreen:  sprite.SubTex{T: t, R: image.Rect(300, 320+15, 300+50, 320+30)},
