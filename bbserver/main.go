@@ -61,36 +61,52 @@ func newEcho(name string, trigPin, echoPin int) (*echo, error) {
 	return &e, nil
 }
 
+func (e *echo) measure() {
+	log.Infof("%s: measuring...", e.name)
+	if err := e.trig.Write(embd.High); err != nil {
+		log.Warnf("can't set trigger to high: %v", err)
+	}
+	time.Sleep(time.Microsecond * 10)
+	if err := e.trig.Write(embd.Low); err != nil {
+		log.Warnf("can't set trigger to low: %v", err)
+	}
+	dur, err := e.echo.TimePulse(embd.High)
+	if err != nil {
+		log.Warnf("can't time pulse: %v", err)
+	}
+	log.Infof("%s: distance: %dcm", e.name, dur.Nanoseconds()/1000*34/1000/2)
+	e.dist = dur.Nanoseconds() / 1000 * 34 / 1000 / 2
+}
+
+const (
+	defaultFastDur = time.Millisecond * 250
+	defaultSlowDur = time.Second
+)
+
+// Goroutine measuring distance in an infinite loop. If distancer is enabled (bot is driving)
+// then measuring on fast timer, otherwise only once per second to save CPU cycles.
 func (e *echo) runDistancer() {
 	if err := e.trig.Write(embd.Low); err != nil {
 		log.Warnf("can't set trigger to low: %v", err)
 	}
-	time.Sleep(time.Second * 1)
-	tick := time.NewTicker(time.Millisecond * 500)
-	defer tick.Stop()
+	time.Sleep(time.Second * 1) // Settle time needed after initial activation.
+	fast := time.NewTicker(defaultFastDur)
+	defer fast.Stop()
+	slow := time.NewTicker(defaultSlowDur)
+	defer slow.Stop()
 	for {
 		select {
 		case <-e.quit:
 			e.done <- true
 			return
-		case <-tick.C:
+		case <-slow.C:
 			if !e.enabled {
-				continue
+				e.measure()
 			}
-			log.Infof("%s: measuring...", e.name)
-			if err := e.trig.Write(embd.High); err != nil {
-				log.Warnf("can't set trigger to high: %v", err)
+		case <-fast.C:
+			if e.enabled {
+				e.measure()
 			}
-			time.Sleep(time.Microsecond * 10)
-			if err := e.trig.Write(embd.Low); err != nil {
-				log.Warnf("can't set trigger to low: %v", err)
-			}
-			dur, err := e.echo.TimePulse(embd.High)
-			if err != nil {
-				log.Warnf("can't time pulse: %v", err)
-			}
-			log.Infof("%s: distance: %dcm", e.name, dur.Nanoseconds()/1000*34/1000/2)
-			e.dist = dur.Nanoseconds() / 1000 * 34 / 1000 / 2
 		}
 	}
 }
@@ -131,72 +147,72 @@ func (d *driver) setMoving(moving bool) {
 }
 
 func (d *driver) stop() {
-	d.left.pwr.Write(embd.Low)
-	d.right.pwr.Write(embd.Low)
+	d.left.pwr = 0
+	d.right.pwr = 0
 	d.setMoving(false)
 }
 
-func (d *driver) forward() {
-	d.left.pwr.Write(embd.High)
-	d.left.fwd.Write(embd.High)
-	d.right.pwr.Write(embd.High)
-	d.right.fwd.Write(embd.High)
+func (d *driver) forward(pwr int32) {
+	d.left.pwr = pwr
+	d.left.fwdPin.Write(embd.High)
+	d.right.pwr = pwr
+	d.right.fwdPin.Write(embd.High)
 	d.setMoving(true)
 }
 
-func (d *driver) backward() {
-	d.left.pwr.Write(embd.High)
-	d.left.fwd.Write(embd.Low)
-	d.right.pwr.Write(embd.High)
-	d.right.fwd.Write(embd.Low)
+func (d *driver) backward(pwr int32) {
+	d.left.pwr = pwr
+	d.left.fwdPin.Write(embd.Low)
+	d.right.pwr = pwr
+	d.right.fwdPin.Write(embd.Low)
 	d.setMoving(true)
 }
 
-func (d *driver) sharpRight() {
-	d.left.pwr.Write(embd.High)
-	d.left.fwd.Write(embd.High)
-	d.right.pwr.Write(embd.High)
-	d.right.fwd.Write(embd.Low)
+func (d *driver) sharpRight(pwr int32) {
+	d.left.pwr = pwr
+	d.left.fwdPin.Write(embd.High)
+	d.right.pwr = pwr
+	d.right.fwdPin.Write(embd.Low)
 	d.setMoving(true)
 }
 
-func (d *driver) sharpLeft() {
-	d.left.pwr.Write(embd.High)
-	d.left.fwd.Write(embd.Low)
-	d.right.pwr.Write(embd.High)
-	d.right.fwd.Write(embd.High)
+func (d *driver) sharpLeft(pwr int32) {
+	d.left.pwr = pwr
+	d.left.fwdPin.Write(embd.Low)
+	d.right.pwr = pwr
+	d.right.fwdPin.Write(embd.High)
 	d.setMoving(true)
 }
 
 func (d *driver) fwdRight() {
-	d.left.pwr.Write(embd.High)
-	d.left.fwd.Write(embd.High)
-	d.right.pwr.Write(embd.Low)
-	d.right.fwd.Write(embd.High)
+	d.left.pwr = 100
+	d.left.fwdPin.Write(embd.High)
+	d.right.pwr = 50
+	d.right.fwdPin.Write(embd.High)
 	d.setMoving(true)
 }
 
 func (d *driver) fwdLeft() {
-	d.left.pwr.Write(embd.Low)
-	d.left.fwd.Write(embd.High)
-	d.right.pwr.Write(embd.High)
-	d.right.fwd.Write(embd.High)
+	d.left.pwr = 50
+	d.left.fwdPin.Write(embd.High)
+	d.right.pwr = 100
+	d.right.fwdPin.Write(embd.High)
 	d.setMoving(true)
 }
 
 func (d *driver) backRight() {
-	d.left.pwr.Write(embd.High)
-	d.left.fwd.Write(embd.Low)
-	d.right.pwr.Write(embd.Low)
-	d.right.fwd.Write(embd.Low)
+	d.left.pwr = 100
+	d.left.fwdPin.Write(embd.Low)
+	d.right.pwr = 50
+	d.right.fwdPin.Write(embd.Low)
 	d.setMoving(true)
 }
 
 func (d *driver) backLeft() {
-	d.left.pwr.Write(embd.Low)
-	d.left.fwd.Write(embd.Low)
-	d.right.pwr.Write(embd.High)
-	d.right.fwd.Write(embd.Low)
+	d.left.pwr = 50
+	d.left.fwdPin.Write(embd.Low)
+	d.right.pwr = 100
+	d.right.fwdPin.Write(embd.Low)
 	d.setMoving(true)
 }
 
@@ -211,56 +227,77 @@ func (s *server) drive(dir *pb.Direction) {
 		s.front.enabled = false
 		s.rear.enabled = false
 		s.driver.stop()
-	case dir.Dy > 5 && dir.Dx > -5 && dir.Dx < 5:
+	case dir.Dy > 25 && dir.Dx > -25 && dir.Dx < 25:
 		s.front.enabled = true
-		s.driver.forward()
-	case dir.Dy < -5 && dir.Dx > -5 && dir.Dx < 5:
+		s.driver.forward(dir.Dy)
+	case dir.Dy < -25 && dir.Dx > -25 && dir.Dx < 25:
 		s.rear.enabled = true
-		s.driver.backward()
-	case dir.Dx > 5 && dir.Dy > -5 && dir.Dy < 5:
-		s.driver.sharpRight()
-	case dir.Dx < -5 && dir.Dy > -5 && dir.Dy < 5:
-		s.driver.sharpLeft()
-	case dir.Dx > 5 && dir.Dy > 5:
+		s.driver.backward(-dir.Dy)
+	case dir.Dx > 25 && dir.Dy > -25 && dir.Dy < 25:
+		s.driver.sharpRight(dir.Dx)
+	case dir.Dx < -25 && dir.Dy > -25 && dir.Dy < 25:
+		s.driver.sharpLeft(-dir.Dx)
+	case dir.Dx > 25 && dir.Dy > 25:
 		s.driver.fwdRight()
-	case dir.Dx < -5 && dir.Dy > 5:
+	case dir.Dx < -25 && dir.Dy > 25:
 		s.driver.fwdLeft()
-	case dir.Dx > 5 && dir.Dy < -5:
+	case dir.Dx > 25 && dir.Dy < -25:
 		s.driver.backRight()
-	case dir.Dx < -5 && dir.Dy < -5:
+	case dir.Dx < -25 && dir.Dy < -25:
 		s.driver.backLeft()
 	}
 }
 
 type engine struct {
-	fwd, pwr embd.DigitalPin
+	fwdPin, pwrPin embd.DigitalPin
+	pwr            int32
 }
 
 func newEngine(pwrPin, fwdPin int) (*engine, error) {
 	var e engine
 	var err error
-	e.pwr, err = embd.NewDigitalPin(pwrPin)
+	e.pwrPin, err = embd.NewDigitalPin(pwrPin)
 	if err != nil {
 		return nil, fmt.Errorf("can't init power pin: %v", err)
 	}
-	e.fwd, err = embd.NewDigitalPin(fwdPin)
+	e.fwdPin, err = embd.NewDigitalPin(fwdPin)
 	if err != nil {
 		return nil, fmt.Errorf("can't init forward pin: %v", err)
 	}
 
 	// Set direction.
-	if err := e.pwr.SetDirection(embd.Out); err != nil {
+	if err := e.pwrPin.SetDirection(embd.Out); err != nil {
 		return nil, fmt.Errorf("can't set power direction: %v", err)
 	}
-	if err := e.fwd.SetDirection(embd.Out); err != nil {
+	if err := e.fwdPin.SetDirection(embd.Out); err != nil {
 		return nil, fmt.Errorf("can't set forward direction: %v", err)
 	}
+	go e.startPWM()
 	return &e, nil
 }
 
 func (e *engine) close() {
-	e.pwr.Close()
-	e.fwd.Close()
+	e.pwrPin.Close()
+	e.fwdPin.Close()
+}
+
+func (e *engine) startPWM() {
+	ticker := time.NewTicker(time.Millisecond * 100)
+	flap := embd.Low
+	for range ticker.C {
+		if e.pwr < 50 {
+			e.pwrPin.Write(embd.Low)
+		} else if e.pwr < 75 {
+			e.pwrPin.Write(flap)
+			if flap == embd.Low {
+				flap = embd.High
+			} else {
+				flap = embd.Low
+			}
+		} else {
+			e.pwrPin.Write(embd.High)
+		}
+	}
 }
 
 const (
@@ -285,10 +322,7 @@ func (s *server) Drive(stream pb.Driver_DriveServer) error {
 
 	for {
 		select {
-		case <-time.After(time.Second):
-			if !s.front.enabled && !s.rear.enabled {
-				continue
-			}
+		case <-time.After(time.Millisecond * 500):
 			var speed int32
 			if s.driver.moving {
 				speed = 100
