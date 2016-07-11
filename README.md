@@ -53,6 +53,6 @@ ios-deploy -b berrybot.app
 
 Build server and upload to your RPI:
 
-`GOOS=linux GOARCH=arm go build -o bbserver/bbserver ./bbserver/ && scp bbserver/bbserver pi:`
+`GOOS=linux GOARCH=arm go build -o build/bbserver ./bbserver/ && scp build/bbserver pi:`
 
 Run server on your RPI using sudo, because using GPIO pins requires it.
