@@ -160,11 +160,11 @@ func (a *App) Reset(sz size.Event) {
 		return
 	}
 	a.ctrl.x = float32(sz.WidthPt)/2 - ctrlSize/2
-	a.ctrl.y = 2*float32(sz.HeightPt)/3 - ctrlSize/2
+	a.ctrl.y = 3*float32(sz.HeightPt)/4 - ctrlSize/2
 	a.ctrl.midx = a.ctrl.x + ctrlSize/2
 	a.ctrl.midy = a.ctrl.y + ctrlSize/2
 	a.stick.x = float32(sz.WidthPt)/2 - ctrlStickSize/2
-	a.stick.y = 2*float32(sz.HeightPt)/3 - ctrlStickSize/2
+	a.stick.y = 3*float32(sz.HeightPt)/4 - ctrlStickSize/2
 	a.calcStickMids()
 	a.bot.x = float32(sz.WidthPt)/2 - botSize/2
 	a.bot.y = float32(sz.HeightPt)/3 - botSize/2
@@ -204,7 +204,7 @@ func (a *App) ResetStick(sz size.Event) {
 		return
 	}
 	a.stick.x = float32(sz.WidthPt)/2 - ctrlStickSize/2
-	a.stick.y = 2*float32(sz.HeightPt)/3 - ctrlStickSize/2
+	a.stick.y = 3*float32(sz.HeightPt)/4 - ctrlStickSize/2
 	a.calcStickMids()
 	a.SendDrive()
 }
