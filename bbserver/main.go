@@ -191,13 +191,13 @@ func (d *driver) sharpLeft(pwr int32) {
 func (d *driver) fwdRight() {
 	d.left.pwr = 100
 	d.left.fwdPin.Write(embd.High)
-	d.right.pwr = 50
+	d.right.pwr = 0
 	d.right.fwdPin.Write(embd.High)
 	d.setMoving(true)
 }
 
 func (d *driver) fwdLeft() {
-	d.left.pwr = 50
+	d.left.pwr = 0
 	d.left.fwdPin.Write(embd.High)
 	d.right.pwr = 100
 	d.right.fwdPin.Write(embd.High)
@@ -207,13 +207,13 @@ func (d *driver) fwdLeft() {
 func (d *driver) backRight() {
 	d.left.pwr = 100
 	d.left.fwdPin.Write(embd.Low)
-	d.right.pwr = 50
+	d.right.pwr = 0
 	d.right.fwdPin.Write(embd.Low)
 	d.setMoving(true)
 }
 
 func (d *driver) backLeft() {
-	d.left.pwr = 50
+	d.left.pwr = 0
 	d.left.fwdPin.Write(embd.Low)
 	d.right.pwr = 100
 	d.right.fwdPin.Write(embd.Low)
