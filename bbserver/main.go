@@ -16,31 +16,33 @@ import (
 
 	log "github.com/Sirupsen/logrus"
 	"github.com/kidoman/embd"
-	_ "github.com/kidoman/embd/host/rpi" // This loads the RPi driver
+	_ "github.com/kidoman/embd/host/rpi" // RaspberryPI driver
 	"google.golang.org/grpc"
 )
 
-// server is used to implement hellowrld.GreeterServer.
+// Server is used to implement steering.DriverServer.
 type server struct {
 	front, rear *echo
 	driver      *driver
 }
 
+// Proximity sensor.
 type echo struct {
-	name       string
-	echo       embd.DigitalPin
-	trig       embd.DigitalPin
-	quit, done chan bool
-	dist       int64
-	last       time.Time
-	enabled    bool
+	name    string
+	echo    embd.DigitalPin
+	trig    embd.DigitalPin
+	waitc   chan struct{}
+	dist    int64
+	last    time.Time
+	enabled bool
+	send    chan bool
 }
 
 func newEcho(name string, trigPin, echoPin int) (*echo, error) {
 	var e echo
 	e.name = name
-	e.quit = make(chan bool)
-	e.done = make(chan bool)
+	e.waitc = make(chan struct{})
+	e.send = make(chan bool)
 	var err error
 	e.trig, err = embd.NewDigitalPin(trigPin)
 	if err != nil {
@@ -61,21 +63,23 @@ func newEcho(name string, trigPin, echoPin int) (*echo, error) {
 	return &e, nil
 }
 
-func (e *echo) measure() {
-	log.Infof("%s: measuring...", e.name)
+// Try to TimePulse proximity sensor to calculate distance.
+func (e *echo) measure() error {
 	if err := e.trig.Write(embd.High); err != nil {
-		log.Warnf("can't set trigger to high: %v", err)
+		return fmt.Errorf("can't set trigger to high: %v", err)
 	}
 	time.Sleep(time.Microsecond * 10)
 	if err := e.trig.Write(embd.Low); err != nil {
-		log.Warnf("can't set trigger to low: %v", err)
+		return fmt.Errorf("can't set trigger to low: %v", err)
 	}
 	dur, err := e.echo.TimePulse(embd.High)
 	if err != nil {
-		log.Warnf("can't time pulse: %v", err)
+		return fmt.Errorf("can't time pulse: %v", err)
 	}
 	log.Infof("%s: distance: %dcm", e.name, dur.Nanoseconds()/1000*34/1000/2)
 	e.dist = dur.Nanoseconds() / 1000 * 34 / 1000 / 2
+	e.send <- true
+	return nil
 }
 
 const (
@@ -96,24 +100,24 @@ func (e *echo) runDistancer() {
 	defer slow.Stop()
 	for {
 		select {
-		case <-e.quit:
-			e.done <- true
+		case <-e.waitc:
 			return
 		case <-slow.C:
-			if !e.enabled {
-				e.measure()
+			if err := e.measure(); err != nil {
+				log.Warn(err)
 			}
 		case <-fast.C:
 			if e.enabled {
-				e.measure()
+				if err := e.measure(); err != nil {
+					log.Warn(err)
+				}
 			}
 		}
 	}
 }
 
 func (e *echo) close() {
-	e.quit <- true
-	<-e.done
+	close(e.waitc)
 	e.echo.Close()
 	e.trig.Close()
 }
@@ -216,35 +220,30 @@ func (d *driver) backLeft() {
 	d.setMoving(true)
 }
 
-const (
-	safeStraightDist = 20
-	safeTurningDist  = 10
-)
-
 func (s *server) drive(dir *pb.Direction) {
 	switch {
-	case dir.Dy > -5 && dir.Dy < 5 && dir.Dx > -5 && dir.Dx < 5:
+	case dir.Dy > 15 && dir.Dx > -15 && dir.Dx < 15:
+		s.front.enabled = true
+		s.driver.forward(dir.Dy)
+	case dir.Dy < -15 && dir.Dx > -15 && dir.Dx < 15:
+		s.rear.enabled = true
+		s.driver.backward(-dir.Dy)
+	case dir.Dx > 15 && dir.Dy > -15 && dir.Dy < 15:
+		s.driver.sharpRight(dir.Dx)
+	case dir.Dx < -15 && dir.Dy > -15 && dir.Dy < 15:
+		s.driver.sharpLeft(-dir.Dx)
+	case dir.Dx > 15 && dir.Dy > 15:
+		s.driver.fwdRight()
+	case dir.Dx < -15 && dir.Dy > 15:
+		s.driver.fwdLeft()
+	case dir.Dx > 15 && dir.Dy < -15:
+		s.driver.backRight()
+	case dir.Dx < -15 && dir.Dy < -15:
+		s.driver.backLeft()
+	default:
 		s.front.enabled = false
 		s.rear.enabled = false
 		s.driver.stop()
-	case dir.Dy > 25 && dir.Dx > -25 && dir.Dx < 25:
-		s.front.enabled = true
-		s.driver.forward(dir.Dy)
-	case dir.Dy < -25 && dir.Dx > -25 && dir.Dx < 25:
-		s.rear.enabled = true
-		s.driver.backward(-dir.Dy)
-	case dir.Dx > 25 && dir.Dy > -25 && dir.Dy < 25:
-		s.driver.sharpRight(dir.Dx)
-	case dir.Dx < -25 && dir.Dy > -25 && dir.Dy < 25:
-		s.driver.sharpLeft(-dir.Dx)
-	case dir.Dx > 25 && dir.Dy > 25:
-		s.driver.fwdRight()
-	case dir.Dx < -25 && dir.Dy > 25:
-		s.driver.fwdLeft()
-	case dir.Dx > 25 && dir.Dy < -25:
-		s.driver.backRight()
-	case dir.Dx < -25 && dir.Dy < -25:
-		s.driver.backLeft()
 	}
 }
 
@@ -282,19 +281,20 @@ func (e *engine) close() {
 }
 
 func (e *engine) startPWM() {
-	ticker := time.NewTicker(time.Millisecond * 100)
+	ticker := time.NewTicker(time.Millisecond * 25)
 	flap := embd.Low
 	for range ticker.C {
-		if e.pwr < 50 {
+		switch {
+		case e.pwr < 15:
 			e.pwrPin.Write(embd.Low)
-		} else if e.pwr < 75 {
+		case e.pwr < 50:
 			e.pwrPin.Write(flap)
 			if flap == embd.Low {
 				flap = embd.High
 			} else {
 				flap = embd.Low
 			}
-		} else {
+		default:
 			e.pwrPin.Write(embd.High)
 		}
 	}
@@ -305,6 +305,16 @@ const (
 	sensorFront
 	sensorRear
 )
+
+func (s *server) sendTelemetry(stream pb.Driver_DriveServer) error {
+	var speed int32
+	if s.driver.moving {
+		speed = 100
+	}
+	log.Info("Sending telemetry!")
+	return stream.Send(&pb.Telemetry{Speed: speed, DistFront: int32(s.front.dist), DistRear: int32(s.rear.dist)})
+
+}
 
 func (s *server) Drive(stream pb.Driver_DriveServer) error {
 	waitc := make(chan struct{})
@@ -322,16 +332,16 @@ func (s *server) Drive(stream pb.Driver_DriveServer) error {
 
 	for {
 		select {
-		case <-time.After(time.Millisecond * 500):
-			var speed int32
-			if s.driver.moving {
-				speed = 100
-			}
-			if err := stream.Send(&pb.Telemetry{Speed: speed, DistFront: int32(s.front.dist), DistRear: int32(s.rear.dist)}); err != nil {
+		case <-s.front.send:
+			if err := s.sendTelemetry(stream); err != nil {
 				log.Errorf("can't send telemetry: %v", err)
 				return err
 			}
-			log.Info("Sending telemetry!")
+		case <-s.rear.send:
+			if err := s.sendTelemetry(stream); err != nil {
+				log.Errorf("can't send telemetry: %v", err)
+				return err
+			}
 		case <-waitc:
 			log.Info("got ERR from client, closing sending loop")
 			return nil
@@ -339,7 +349,10 @@ func (s *server) Drive(stream pb.Driver_DriveServer) error {
 	}
 }
 
-var grpcPort = flag.String("grpc-port", "31337", "gRPC listen port")
+var (
+	grpcPort  = flag.String("grpc-port", "31337", "gRPC listen port")
+	bcastPort = flag.String("bcast-port", "8032", "UDP broadcast port used by clients for discovery")
+)
 
 func main() {
 	flag.Parse()
@@ -376,7 +389,7 @@ func main() {
 	}
 	defer right.close()
 
-	// Listen for GRPC connections.
+	// Listen for gRPC connections.
 	lis, err := net.Listen("tcp", ":"+*grpcPort)
 	if err != nil {
 		log.Fatalf("failed to listen: %v", err)
@@ -397,7 +410,7 @@ func main() {
 	}
 	defer bcast.Close()
 
-	broadcastAddr := "255.255.255.255:8032"
+	broadcastAddr := "255.255.255.255:" + *bcastPort
 	dst, err := net.ResolveUDPAddr("udp", broadcastAddr)
 	if err != nil {
 		log.Fatal(err)
