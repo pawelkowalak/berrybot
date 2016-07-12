@@ -6,8 +6,6 @@ package steering;
 service Driver {
   // Drive is a client-to-server stream providing direction.
   rpc Drive(stream Direction) returns (stream Telemetry) {}
-  // rpc GetImage(Image) returns (stream ImageBytes) {}
-  // rpc GetVideo(Video) returns (stream VideoBytes) {}
 }
 
 // Direction is normalized delta x and y that corresponds to joystick position. Range should be between -100 and 100.
@@ -21,11 +19,3 @@ message Telemetry {
   int32 distFront = 2;
   int32 distRear = 3;
 }
-
-// message Image {
-//   bool live = 1;
-// }
-//
-// message ImageBytes {
-//   bytes image = 1;
-// }
