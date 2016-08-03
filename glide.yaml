@@ -1,0 +1,28 @@
+package: github.com/viru/berrybot
+import:
+- package: github.com/Sirupsen/logrus
+- package: github.com/golang/protobuf
+  subpackages:
+  - proto
+- package: github.com/kidoman/embd
+  subpackages:
+  - host/rpi
+- package: github.com/viru/gmlog
+- package: golang.org/x/mobile
+  subpackages:
+  - app
+  - asset
+  - event/lifecycle
+  - event/paint
+  - event/size
+  - event/touch
+  - exp/f32
+  - exp/gl/glutil
+  - exp/sprite
+  - exp/sprite/clock
+  - exp/sprite/glsprite
+  - gl
+- package: golang.org/x/net
+  subpackages:
+  - context
+- package: google.golang.org/grpc

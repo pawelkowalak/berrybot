@@ -1,0 +1,87 @@
+hash: b59d32bf35c1de3839cfe6c1d9b2036977ba44baf36cba2f98043cd43b7ea6d2
+updated: 2016-08-03T10:40:23.524303168+02:00
+imports:
+- name: github.com/golang/freetype
+  version: 38b4c392adc5eed94207994c4848fff99f4ac234
+  subpackages:
+  - truetype
+  - raster
+- name: github.com/golang/glog
+  version: 23def4e6c14b4da8ac2ed8007337bc5eb5007998
+- name: github.com/golang/protobuf
+  version: c3cefd437628a0b7d31b34fe44b3a7a540e98527
+  subpackages:
+  - proto
+- name: github.com/kidoman/embd
+  version: bfcd1345fe4e3d17ca82475c0c2f3d53120f87a9
+  subpackages:
+  - host/rpi
+  - host/generic
+- name: github.com/Sirupsen/logrus
+  version: a283a10442df8dc09befd873fab202bf8a253d6a
+- name: github.com/viru/gmlog
+  version: 64dd08293638a334f6c705ee236e05c4cca0044e
+- name: golang.org/x/exp
+  version: 77b4e874f140791b724505e0d0c388e4ad11cfc9
+  subpackages:
+  - shiny/driver/gldriver
+  - shiny/screen
+  - shiny/driver/internal/drawer
+  - shiny/driver/internal/errscreen
+  - shiny/driver/internal/event
+  - shiny/driver/internal/lifecycler
+  - shiny/driver/internal/win32
+  - shiny/driver/internal/x11key
+- name: golang.org/x/image
+  version: c348254d65821a0aaca538bf5e7774bb522c1dec
+  subpackages:
+  - font
+  - math/fixed
+  - math/f64
+- name: golang.org/x/mobile
+  version: f58d095fc586f2233d296426070b6c353f35bc9d
+  subpackages:
+  - app
+  - asset
+  - event/lifecycle
+  - event/paint
+  - event/size
+  - event/touch
+  - exp/f32
+  - exp/gl/glutil
+  - exp/sprite
+  - exp/sprite/clock
+  - exp/sprite/glsprite
+  - gl
+  - exp/font
+  - geom
+  - app/internal/callfn
+  - event/key
+  - event/mouse
+  - internal/mobileinit
+- name: golang.org/x/net
+  version: e2ba55e4e78399d85f2a0e0b92396b81ed410633
+  subpackages:
+  - context
+  - http2
+  - trace
+  - http2/hpack
+  - lex/httplex
+  - internal/timeseries
+- name: golang.org/x/sys
+  version: a646d33e2ee3172a661fc09bca23bb4889a41bc8
+  subpackages:
+  - unix
+  - windows
+- name: google.golang.org/grpc
+  version: 35896af9ad39c1fb1b1cd925fe3621be361e3d81
+  subpackages:
+  - codes
+  - credentials
+  - grpclog
+  - internal
+  - metadata
+  - naming
+  - transport
+  - peer
+devImports: []
