@@ -1,3 +1,4 @@
+[![Report](https://goreportcard.com/badge/github.com/viru/berrybot)](https://goreportcard.com/report/github.com/viru/berrybot)
 [![CircleCI](https://circleci.com/gh/viru/berrybot.svg?style=svg)](https://circleci.com/gh/viru/berrybot)
 
 # BerryBot

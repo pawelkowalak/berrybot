@@ -368,17 +368,17 @@ func loadTextures(eng sprite.Engine) []sprite.SubTex {
 	// adjacent textures leaking into a given texture.
 	// See: http://stackoverflow.com/questions/19611745/opengl-black-lines-in-between-tiles
 	return []sprite.SubTex{
-		texCtrl:         sprite.SubTex{T: t, R: image.Rect(0, 0, 320, 320)},
-		texStick:        sprite.SubTex{T: t, R: image.Rect(320, 0, 440, 120)},
-		texBot:          sprite.SubTex{T: t, R: image.Rect(0, 320, 300, 610)},
-		texProxSmGrey:   sprite.SubTex{T: t, R: image.Rect(300, 320, 300+50, 320+15)},
-		texProxSmGreen:  sprite.SubTex{T: t, R: image.Rect(300, 320+15, 300+50, 320+30)},
-		texProxSmOrange: sprite.SubTex{T: t, R: image.Rect(300, 320+30, 300+50, 320+45)},
-		texProxSmRed:    sprite.SubTex{T: t, R: image.Rect(300, 320+45, 300+50, 320+60)},
-		texProxMdGrey:   sprite.SubTex{T: t, R: image.Rect(300, 320+60, 300+78, 320+80)},
-		texProxMdOrange: sprite.SubTex{T: t, R: image.Rect(300, 320+80, 300+78, 320+100)},
-		texProxMdRed:    sprite.SubTex{T: t, R: image.Rect(300, 320+100, 300+78, 320+120)},
-		texProxLgGrey:   sprite.SubTex{T: t, R: image.Rect(300, 320+120, 300+110, 320+147)},
-		texProxLgRed:    sprite.SubTex{T: t, R: image.Rect(300, 320+147, 300+110, 320+174)},
+		texCtrl:         {T: t, R: image.Rect(0, 0, 320, 320)},
+		texStick:        {T: t, R: image.Rect(320, 0, 440, 120)},
+		texBot:          {T: t, R: image.Rect(0, 320, 300, 610)},
+		texProxSmGrey:   {T: t, R: image.Rect(300, 320, 300+50, 320+15)},
+		texProxSmGreen:  {T: t, R: image.Rect(300, 320+15, 300+50, 320+30)},
+		texProxSmOrange: {T: t, R: image.Rect(300, 320+30, 300+50, 320+45)},
+		texProxSmRed:    {T: t, R: image.Rect(300, 320+45, 300+50, 320+60)},
+		texProxMdGrey:   {T: t, R: image.Rect(300, 320+60, 300+78, 320+80)},
+		texProxMdOrange: {T: t, R: image.Rect(300, 320+80, 300+78, 320+100)},
+		texProxMdRed:    {T: t, R: image.Rect(300, 320+100, 300+78, 320+120)},
+		texProxLgGrey:   {T: t, R: image.Rect(300, 320+120, 300+110, 320+147)},
+		texProxLgRed:    {T: t, R: image.Rect(300, 320+147, 300+110, 320+174)},
 	}
 }
