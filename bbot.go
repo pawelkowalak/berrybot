@@ -8,7 +8,7 @@ import (
 	"math"
 	"net"
 
-	pb "github.com/viru/berrybot/proto"
+	pb "github.com/pawelkowalak/berrybot/proto"
 
 	"golang.org/x/mobile/asset"
 	"golang.org/x/mobile/event/size"

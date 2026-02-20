@@ -39,16 +39,16 @@ Generate proto:
 
 Install and run mobile app locally:
 
-`go install github.com/viru/berrybot && berrybot`
+`go install github.com/pawelkowalak/berrybot && berrybot`
 
 Build and install mobile app on connected Android device:
 
-`gomobile install github.com/viru/berrybot/berrycli`
+`gomobile install github.com/pawelkowalak/berrybot/berrycli`
 
 Build and install mobile app on connected iOS device:
 
 ```sh
-gomobile build -target=ios github.com/viru/berrybot
+gomobile build -target=ios github.com/pawelkowalak/berrybot
 ios-deploy -b berrybot.app
 ```
 

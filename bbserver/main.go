@@ -12,9 +12,9 @@ import (
 	"syscall"
 	"time"
 
-	pb "github.com/viru/berrybot/proto"
+	pb "github.com/pawelkowalak/berrybot/proto"
 
-	log "github.com/Sirupsen/logrus"
+	log "github.com/sirupsen/logrus"
 	"github.com/kidoman/embd"
 	_ "github.com/kidoman/embd/host/rpi" // RaspberryPI driver
 	"google.golang.org/grpc"

@@ -1,4 +1,4 @@
-package: github.com/viru/berrybot
+package: github.com/pawelkowalak/berrybot
 import:
 - package: github.com/Sirupsen/logrus
 - package: github.com/golang/protobuf
