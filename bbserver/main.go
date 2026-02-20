@@ -14,9 +14,9 @@ import (
 
 	pb "github.com/pawelkowalak/berrybot/proto"
 
-	log "github.com/sirupsen/logrus"
 	"github.com/kidoman/embd"
 	_ "github.com/kidoman/embd/host/rpi" // RaspberryPI driver
+	log "github.com/sirupsen/logrus"
 	"google.golang.org/grpc"
 )
 
@@ -220,25 +220,68 @@ func (d *driver) backLeft() {
 	d.setMoving(true)
 }
 
+const driveDeadZone = 15
+
+// driveCmd represents a single driving intent derived from joystick (Dx, Dy).
+type driveCmd int
+
+const (
+	cmdStop driveCmd = iota
+	cmdForward
+	cmdBackward
+	cmdSharpRight
+	cmdSharpLeft
+	cmdFwdRight
+	cmdFwdLeft
+	cmdBackRight
+	cmdBackLeft
+)
+
+// driveRule maps a condition (dir) to a drive command. First match wins.
+type driveRule struct {
+	pred func(*pb.Direction) bool
+	cmd  driveCmd
+}
+
+var driveTable = []driveRule{
+	{func(d *pb.Direction) bool { return d.Dy > driveDeadZone && d.Dx > -driveDeadZone && d.Dx < driveDeadZone }, cmdForward},
+	{func(d *pb.Direction) bool { return d.Dy < -driveDeadZone && d.Dx > -driveDeadZone && d.Dx < driveDeadZone }, cmdBackward},
+	{func(d *pb.Direction) bool { return d.Dx > driveDeadZone && d.Dy > -driveDeadZone && d.Dy < driveDeadZone }, cmdSharpRight},
+	{func(d *pb.Direction) bool { return d.Dx < -driveDeadZone && d.Dy > -driveDeadZone && d.Dy < driveDeadZone }, cmdSharpLeft},
+	{func(d *pb.Direction) bool { return d.Dx > driveDeadZone && d.Dy > driveDeadZone }, cmdFwdRight},
+	{func(d *pb.Direction) bool { return d.Dx < -driveDeadZone && d.Dy > driveDeadZone }, cmdFwdLeft},
+	{func(d *pb.Direction) bool { return d.Dx > driveDeadZone && d.Dy < -driveDeadZone }, cmdBackRight},
+	{func(d *pb.Direction) bool { return d.Dx < -driveDeadZone && d.Dy < -driveDeadZone }, cmdBackLeft},
+}
+
+func classifyDirection(dir *pb.Direction) driveCmd {
+	for _, r := range driveTable {
+		if r.pred(dir) {
+			return r.cmd
+		}
+	}
+	return cmdStop
+}
+
 func (s *server) drive(dir *pb.Direction) {
-	switch {
-	case dir.Dy > 15 && dir.Dx > -15 && dir.Dx < 15:
+	switch classifyDirection(dir) {
+	case cmdForward:
 		s.front.enabled = true
 		s.driver.forward(dir.Dy)
-	case dir.Dy < -15 && dir.Dx > -15 && dir.Dx < 15:
+	case cmdBackward:
 		s.rear.enabled = true
 		s.driver.backward(-dir.Dy)
-	case dir.Dx > 15 && dir.Dy > -15 && dir.Dy < 15:
+	case cmdSharpRight:
 		s.driver.sharpRight(dir.Dx)
-	case dir.Dx < -15 && dir.Dy > -15 && dir.Dy < 15:
+	case cmdSharpLeft:
 		s.driver.sharpLeft(-dir.Dx)
-	case dir.Dx > 15 && dir.Dy > 15:
+	case cmdFwdRight:
 		s.driver.fwdRight()
-	case dir.Dx < -15 && dir.Dy > 15:
+	case cmdFwdLeft:
 		s.driver.fwdLeft()
-	case dir.Dx > 15 && dir.Dy < -15:
+	case cmdBackRight:
 		s.driver.backRight()
-	case dir.Dx < -15 && dir.Dy < -15:
+	case cmdBackLeft:
 		s.driver.backLeft()
 	default:
 		s.front.enabled = false
