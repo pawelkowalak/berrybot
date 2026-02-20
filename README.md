@@ -45,12 +45,30 @@ Build and install mobile app on connected Android device:
 
 `gomobile install github.com/pawelkowalak/berrybot/berrycli`
 
-Build and install mobile app on connected iOS device:
+Build iOS app:
+
+**Real device** (iPhone/iPad):
 
 ```sh
-gomobile build -target=ios github.com/pawelkowalak/berrybot
+gomobile build -target=ios/arm64 -bundleid com.pawelkowalak.berrybot -o berrybot.app .
+./scripts/ios-merge-plist.sh berrybot.app
 ios-deploy -b berrybot.app
 ```
+
+**Simulator** (must use a simulator target or the binary is rejected by amfid and the app won’t start):
+
+```sh
+gomobile build -target=iossimulator/arm64 -bundleid com.pawelkowalak.berrybot -o berrybot.app .
+./scripts/ios-merge-plist.sh berrybot.app
+open -a Simulator
+# Then drag berrybot.app into the Simulator window, or: xcrun simctl install booted berrybot.app
+```
+
+On Intel Macs use `-target=iossimulator/amd64` instead of `iossimulator/arm64`.
+
+**Simulator caveats:** The app uses the legacy (non–UIScene) lifecycle. On Simulator you may see: “Snapshot generation … denylisted”, “Memorystatus failed”, “UIScene lifecycle will soon be required”, and “Scene update failed”. The app can still run; if the window is black or the app exits, prefer testing on a **real device**, where behavior is more reliable.
+
+The plist merge injects `NSLocalNetworkUsageDescription` so iOS allows local network access (UDP discovery on port 8032). Without it, the app can crash or fail to discover the robot on iOS 14+.
 
 Build server and upload to your RPI:
 
