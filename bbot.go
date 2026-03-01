@@ -2,9 +2,9 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"image"
 	_ "image/png"
-	"io"
 	"math"
 	"net"
 	"strings"
@@ -88,15 +88,21 @@ func NewApp() *App {
 	go func() {
 		for {
 			if !a.connected {
-				a.discoverBot()
+				if err := a.discoverBot(); err != nil {
+					log.Printf("discovery failed: %v (retrying in 3s...)", err)
+					time.Sleep(3 * time.Second)
+				}
 				continue
 			}
 			t, err := a.DriveStream.Recv()
-			if err == io.EOF {
-				return
-			}
 			if err != nil {
-				return
+				log.Printf("stream error: %v (reconnecting...)", err)
+				a.connected = false
+				if a.conn != nil {
+					a.conn.Close()
+					a.conn = nil
+				}
+				continue
 			}
 			a.bot.front.SetDist(t.DistFront)
 			a.bot.rear.SetDist(t.DistRear)
@@ -108,30 +114,31 @@ func NewApp() *App {
 const defaultBcastPort = "8032"
 
 // discoverBot listens for UDP broadcasts on port 8032 and tries to connect to
-// the first server it finds. This function blocks.
-func (a *App) discoverBot() {
-	// Listen on IPv4 so we receive 255.255.255.255 / subnet broadcasts.
+// the first server it finds. Returns an error instead of fataling so the caller
+// can retry.
+func (a *App) discoverBot() error {
 	log.Printf("Listening on UDP/%s...", defaultBcastPort)
 	c, err := net.ListenPacket("udp4", "0.0.0.0:"+defaultBcastPort)
 	if err != nil {
-		log.Fatal(err)
+		return fmt.Errorf("listen: %w", err)
 	}
 	defer c.Close()
+
 	portBuf := make([]byte, 512)
 	n, peer, err := c.ReadFrom(portBuf)
 	if err != nil {
-		log.Fatal(err)
+		return fmt.Errorf("read broadcast: %w", err)
 	}
 	portStr := strings.TrimSpace(string(portBuf[:n]))
 	log.Printf("Received port broadcast from %s (port %q)", peer, portStr)
+
 	host, _, err := net.SplitHostPort(peer.String())
 	if err != nil {
-		log.Fatalf("can't parse peer IP address %v", err)
+		return fmt.Errorf("parse peer address: %w", err)
 	}
 
-	// Connect to first discovered bot via GRPC. Use passthrough resolver so
-	// gRPC uses the IP:port directly without DNS, and force IPv4.
-	// Retry in a loop so macOS has time to show the Local Network permission prompt.
+	// Connect via gRPC. Use passthrough resolver so gRPC uses the IP:port
+	// directly without DNS, and force IPv4.
 	addr := "passthrough:///" + net.JoinHostPort(host, portStr)
 	a.conn, err = grpc.NewClient(addr,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
@@ -140,26 +147,26 @@ func (a *App) discoverBot() {
 		}),
 	)
 	if err != nil {
-		log.Fatalf("did not connect: %v", err)
+		return fmt.Errorf("grpc dial: %w", err)
 	}
 	cli := pb.NewDriverClient(a.conn)
 
-	for attempt := 1; ; attempt++ {
+	// Retry the streaming RPC so macOS has time to show network permission prompts.
+	const maxAttempts = 10
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		a.DriveStream, err = cli.Drive(context.Background())
 		if err == nil {
-			break
+			a.connected = true
+			log.Print("Connected")
+			return nil
 		}
-		log.Printf("connection attempt %d failed: %v (retrying in 3s...)", attempt, err)
+		log.Printf("connection attempt %d/%d failed: %v", attempt, maxAttempts, err)
 		time.Sleep(3 * time.Second)
 	}
 
-	// a.VideoStream, err = cli.GetImage(context.Background(), &pb.Image{Live: true})
-	// if err != nil {
-	// 	log.Fatalf("%v.GetImage(_) = _, %v", cli, err)
-	// }
-
-	a.connected = true
-	log.Print("Connected")
+	a.conn.Close()
+	a.conn = nil
+	return fmt.Errorf("grpc stream: gave up after %d attempts: %w", maxAttempts, err)
 }
 
 // Size of controller and stick inside in points.
