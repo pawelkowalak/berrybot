@@ -420,8 +420,9 @@ func (s *server) Drive(stream pb.Driver_DriveServer) error {
 }
 
 var (
-	grpcPort  = flag.String("grpc-port", "31337", "gRPC listen port")
-	bcastPort = flag.String("bcast-port", "8032", "UDP broadcast port used by clients for discovery")
+	grpcPort   = flag.String("grpc-port", "31337", "gRPC listen port")
+	bcastPort  = flag.String("bcast-port", "8032", "UDP broadcast port used by clients for discovery")
+	bcastDest  = flag.String("bcast-dest", "255.255.255.255", "UDP broadcast destination (use e.g. 192.168.1.255 for subnet-directed broadcast if 255.255.255.255 doesn't reach the app)")
 )
 
 func main() {
@@ -444,8 +445,9 @@ func main() {
 		log.Fatalf("Can't init rear echo: %v", err)
 	}
 	defer rear.close()
-	go front.runDistancer()
-	go rear.runDistancer()
+	// Proximity sensors not connected; distancer goroutines disabled.
+	// go front.runDistancer()
+	// go rear.runDistancer()
 
 	left, err := newEngine(23, 4)
 	if err != nil {
@@ -472,14 +474,14 @@ func main() {
 	s := grpc.NewServer()
 	pb.RegisterDriverServer(s, &srv)
 
-	// Open broadcast connection.
-	bcast, err := net.ListenPacket("udp", ":0")
+	// Open broadcast connection. (Go enables SO_BROADCAST for UDP sockets on Linux by default.)
+	bcast, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4zero, Port: 0})
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer bcast.Close()
 
-	broadcastAddr := "255.255.255.255:" + *bcastPort
+	broadcastAddr := *bcastDest + ":" + *bcastPort
 	dst, err := net.ResolveUDPAddr("udp", broadcastAddr)
 	if err != nil {
 		log.Fatal(err)

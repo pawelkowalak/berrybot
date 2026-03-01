@@ -1,12 +1,14 @@
 package main
 
 import (
-	"fmt"
+	"context"
 	"image"
 	_ "image/png"
 	"io"
 	"math"
 	"net"
+	"strings"
+	"time"
 
 	pb "github.com/pawelkowalak/berrybot/proto"
 
@@ -15,8 +17,8 @@ import (
 	"golang.org/x/mobile/exp/f32"
 	"golang.org/x/mobile/exp/sprite"
 	"golang.org/x/mobile/exp/sprite/clock"
-	"golang.org/x/net/context"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 )
 
 // App holds an app context.
@@ -108,34 +110,47 @@ const defaultBcastPort = "8032"
 // discoverBot listens for UDP broadcasts on port 8032 and tries to connect to
 // the first server it finds. This function blocks.
 func (a *App) discoverBot() {
-	// Listen for bots on broadcast.
+	// Listen on IPv4 so we receive 255.255.255.255 / subnet broadcasts.
 	log.Printf("Listening on UDP/%s...", defaultBcastPort)
-	c, err := net.ListenPacket("udp", ":"+defaultBcastPort)
+	c, err := net.ListenPacket("udp4", "0.0.0.0:"+defaultBcastPort)
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer c.Close()
-	port := make([]byte, 512)
-	_, peer, err := c.ReadFrom(port)
+	portBuf := make([]byte, 512)
+	n, peer, err := c.ReadFrom(portBuf)
 	if err != nil {
 		log.Fatal(err)
 	}
-	log.Printf("Received port broadcast from %s", peer)
+	portStr := strings.TrimSpace(string(portBuf[:n]))
+	log.Printf("Received port broadcast from %s (port %q)", peer, portStr)
 	host, _, err := net.SplitHostPort(peer.String())
 	if err != nil {
 		log.Fatalf("can't parse peer IP address %v", err)
 	}
 
-	// Connect to first discovered bot via GRPC.
-	a.conn, err = grpc.Dial(fmt.Sprintf("%s:%s", host, string(port)), grpc.WithInsecure())
+	// Connect to first discovered bot via GRPC. Use passthrough resolver so
+	// gRPC uses the IP:port directly without DNS, and force IPv4.
+	// Retry in a loop so macOS has time to show the Local Network permission prompt.
+	addr := "passthrough:///" + net.JoinHostPort(host, portStr)
+	a.conn, err = grpc.NewClient(addr,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithContextDialer(func(ctx context.Context, target string) (net.Conn, error) {
+			return net.Dial("tcp4", target)
+		}),
+	)
 	if err != nil {
 		log.Fatalf("did not connect: %v", err)
 	}
 	cli := pb.NewDriverClient(a.conn)
 
-	a.DriveStream, err = cli.Drive(context.Background())
-	if err != nil {
-		log.Fatalf("%v.Drive(_) = _, %v", cli, err)
+	for attempt := 1; ; attempt++ {
+		a.DriveStream, err = cli.Drive(context.Background())
+		if err == nil {
+			break
+		}
+		log.Printf("connection attempt %d failed: %v (retrying in 3s...)", attempt, err)
+		time.Sleep(3 * time.Second)
 	}
 
 	// a.VideoStream, err = cli.GetImage(context.Background(), &pb.Image{Live: true})
