@@ -1,6 +1,7 @@
 syntax = "proto3";
 
 package steering;
+option go_package = "github.com/pawelkowalak/berrybot/proto;pb";
 
 // The driving service definition.
 service Driver {

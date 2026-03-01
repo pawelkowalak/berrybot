@@ -14,14 +14,16 @@ import (
 
 	pb "github.com/pawelkowalak/berrybot/proto"
 
-	"github.com/kidoman/embd"
-	_ "github.com/kidoman/embd/host/rpi" // RaspberryPI driver
 	log "github.com/sirupsen/logrus"
 	"google.golang.org/grpc"
+	"periph.io/x/conn/v3/gpio"
+	"periph.io/x/conn/v3/gpio/gpioreg"
+	"periph.io/x/host/v3"
 )
 
 // Server is used to implement steering.DriverServer.
 type server struct {
+	pb.UnimplementedDriverServer
 	front, rear *echo
 	driver      *driver
 }
@@ -29,8 +31,8 @@ type server struct {
 // Proximity sensor.
 type echo struct {
 	name    string
-	echo    embd.DigitalPin
-	trig    embd.DigitalPin
+	echo    gpio.PinIO
+	trig    gpio.PinIO
 	waitc   chan struct{}
 	dist    int64
 	last    time.Time
@@ -43,39 +45,56 @@ func newEcho(name string, trigPin, echoPin int) (*echo, error) {
 	e.name = name
 	e.waitc = make(chan struct{})
 	e.send = make(chan bool)
-	var err error
-	e.trig, err = embd.NewDigitalPin(trigPin)
-	if err != nil {
-		return nil, fmt.Errorf("can't init trigger pin: %v", err)
+
+	trig := gpioreg.ByName(fmt.Sprintf("GPIO%d", trigPin))
+	if trig == nil {
+		return nil, fmt.Errorf("can't find trigger pin GPIO%d", trigPin)
 	}
-	e.echo, err = embd.NewDigitalPin(echoPin)
-	if err != nil {
-		return nil, fmt.Errorf("can't init echo pin: %v", err)
+	echo := gpioreg.ByName(fmt.Sprintf("GPIO%d", echoPin))
+	if echo == nil {
+		return nil, fmt.Errorf("can't find echo pin GPIO%d", echoPin)
+	}
+	e.trig = trig
+	e.echo = echo
+
+	if err := e.trig.Out(gpio.Low); err != nil {
+		return nil, fmt.Errorf("can't set trigger pin low: %v", err)
+	}
+	if err := e.echo.In(gpio.PullDown, gpio.NoEdge); err != nil {
+		return nil, fmt.Errorf("can't configure echo pin: %v", err)
 	}
 
-	// Set direction.
-	if err := e.trig.SetDirection(embd.Out); err != nil {
-		return nil, fmt.Errorf("can't set trigger direction: %v", err)
-	}
-	if err := e.echo.SetDirection(embd.In); err != nil {
-		return nil, fmt.Errorf("can't set echo direction: %v", err)
-	}
 	return &e, nil
 }
 
-// Try to TimePulse proximity sensor to calculate distance.
+// Try to measure proximity sensor pulse to calculate distance.
 func (e *echo) measure() error {
-	if err := e.trig.Write(embd.High); err != nil {
+	// Trigger a 10µs pulse.
+	if err := e.trig.Out(gpio.High); err != nil {
 		return fmt.Errorf("can't set trigger to high: %v", err)
 	}
-	time.Sleep(time.Microsecond * 10)
-	if err := e.trig.Write(embd.Low); err != nil {
+	time.Sleep(10 * time.Microsecond)
+	if err := e.trig.Out(gpio.Low); err != nil {
 		return fmt.Errorf("can't set trigger to low: %v", err)
 	}
-	dur, err := e.echo.TimePulse(embd.High)
-	if err != nil {
-		return fmt.Errorf("can't time pulse: %v", err)
+
+	// Wait for the echo pin to go high, then low, measuring the high duration.
+	if err := e.echo.In(gpio.PullDown, gpio.RisingEdge); err != nil {
+		return fmt.Errorf("can't configure echo pin for rising edge: %v", err)
 	}
+	if !e.echo.WaitForEdge(50 * time.Millisecond) {
+		return fmt.Errorf("timeout waiting for echo rising edge")
+	}
+	start := time.Now()
+
+	if err := e.echo.In(gpio.PullDown, gpio.FallingEdge); err != nil {
+		return fmt.Errorf("can't configure echo pin for falling edge: %v", err)
+	}
+	if !e.echo.WaitForEdge(50 * time.Millisecond) {
+		return fmt.Errorf("timeout waiting for echo falling edge")
+	}
+	dur := time.Since(start)
+
 	log.Infof("%s: distance: %dcm", e.name, dur.Nanoseconds()/1000*34/1000/2)
 	e.dist = dur.Nanoseconds() / 1000 * 34 / 1000 / 2
 	e.send <- true
@@ -90,7 +109,7 @@ const (
 // Goroutine measuring distance in an infinite loop. If distancer is enabled (bot is driving)
 // then measuring on fast timer, otherwise only once per second to save CPU cycles.
 func (e *echo) runDistancer() {
-	if err := e.trig.Write(embd.Low); err != nil {
+	if err := e.trig.Out(gpio.Low); err != nil {
 		log.Warnf("can't set trigger to low: %v", err)
 	}
 	time.Sleep(time.Second * 1) // Settle time needed after initial activation.
@@ -118,8 +137,6 @@ func (e *echo) runDistancer() {
 
 func (e *echo) close() {
 	close(e.waitc)
-	e.echo.Close()
-	e.trig.Close()
 }
 
 type driver struct {
@@ -158,65 +175,65 @@ func (d *driver) stop() {
 
 func (d *driver) forward(pwr int32) {
 	d.left.pwr = pwr
-	d.left.fwdPin.Write(embd.High)
+	_ = d.left.fwdPin.Out(gpio.High)
 	d.right.pwr = pwr
-	d.right.fwdPin.Write(embd.High)
+	_ = d.right.fwdPin.Out(gpio.High)
 	d.setMoving(true)
 }
 
 func (d *driver) backward(pwr int32) {
 	d.left.pwr = pwr
-	d.left.fwdPin.Write(embd.Low)
+	_ = d.left.fwdPin.Out(gpio.Low)
 	d.right.pwr = pwr
-	d.right.fwdPin.Write(embd.Low)
+	_ = d.right.fwdPin.Out(gpio.Low)
 	d.setMoving(true)
 }
 
 func (d *driver) sharpRight(pwr int32) {
 	d.left.pwr = pwr
-	d.left.fwdPin.Write(embd.High)
+	_ = d.left.fwdPin.Out(gpio.High)
 	d.right.pwr = pwr
-	d.right.fwdPin.Write(embd.Low)
+	_ = d.right.fwdPin.Out(gpio.Low)
 	d.setMoving(true)
 }
 
 func (d *driver) sharpLeft(pwr int32) {
 	d.left.pwr = pwr
-	d.left.fwdPin.Write(embd.Low)
+	_ = d.left.fwdPin.Out(gpio.Low)
 	d.right.pwr = pwr
-	d.right.fwdPin.Write(embd.High)
+	_ = d.right.fwdPin.Out(gpio.High)
 	d.setMoving(true)
 }
 
 func (d *driver) fwdRight() {
 	d.left.pwr = 100
-	d.left.fwdPin.Write(embd.High)
+	_ = d.left.fwdPin.Out(gpio.High)
 	d.right.pwr = 0
-	d.right.fwdPin.Write(embd.High)
+	_ = d.right.fwdPin.Out(gpio.High)
 	d.setMoving(true)
 }
 
 func (d *driver) fwdLeft() {
 	d.left.pwr = 0
-	d.left.fwdPin.Write(embd.High)
+	_ = d.left.fwdPin.Out(gpio.High)
 	d.right.pwr = 100
-	d.right.fwdPin.Write(embd.High)
+	_ = d.right.fwdPin.Out(gpio.High)
 	d.setMoving(true)
 }
 
 func (d *driver) backRight() {
 	d.left.pwr = 100
-	d.left.fwdPin.Write(embd.Low)
+	_ = d.left.fwdPin.Out(gpio.Low)
 	d.right.pwr = 0
-	d.right.fwdPin.Write(embd.Low)
+	_ = d.right.fwdPin.Out(gpio.Low)
 	d.setMoving(true)
 }
 
 func (d *driver) backLeft() {
 	d.left.pwr = 0
-	d.left.fwdPin.Write(embd.Low)
+	_ = d.left.fwdPin.Out(gpio.Low)
 	d.right.pwr = 100
-	d.right.fwdPin.Write(embd.Low)
+	_ = d.right.fwdPin.Out(gpio.Low)
 	d.setMoving(true)
 }
 
@@ -244,10 +261,18 @@ type driveRule struct {
 }
 
 var driveTable = []driveRule{
-	{func(d *pb.Direction) bool { return d.Dy > driveDeadZone && d.Dx > -driveDeadZone && d.Dx < driveDeadZone }, cmdForward},
-	{func(d *pb.Direction) bool { return d.Dy < -driveDeadZone && d.Dx > -driveDeadZone && d.Dx < driveDeadZone }, cmdBackward},
-	{func(d *pb.Direction) bool { return d.Dx > driveDeadZone && d.Dy > -driveDeadZone && d.Dy < driveDeadZone }, cmdSharpRight},
-	{func(d *pb.Direction) bool { return d.Dx < -driveDeadZone && d.Dy > -driveDeadZone && d.Dy < driveDeadZone }, cmdSharpLeft},
+	{func(d *pb.Direction) bool {
+		return d.Dy > driveDeadZone && d.Dx > -driveDeadZone && d.Dx < driveDeadZone
+	}, cmdForward},
+	{func(d *pb.Direction) bool {
+		return d.Dy < -driveDeadZone && d.Dx > -driveDeadZone && d.Dx < driveDeadZone
+	}, cmdBackward},
+	{func(d *pb.Direction) bool {
+		return d.Dx > driveDeadZone && d.Dy > -driveDeadZone && d.Dy < driveDeadZone
+	}, cmdSharpRight},
+	{func(d *pb.Direction) bool {
+		return d.Dx < -driveDeadZone && d.Dy > -driveDeadZone && d.Dy < driveDeadZone
+	}, cmdSharpLeft},
 	{func(d *pb.Direction) bool { return d.Dx > driveDeadZone && d.Dy > driveDeadZone }, cmdFwdRight},
 	{func(d *pb.Direction) bool { return d.Dx < -driveDeadZone && d.Dy > driveDeadZone }, cmdFwdLeft},
 	{func(d *pb.Direction) bool { return d.Dx > driveDeadZone && d.Dy < -driveDeadZone }, cmdBackRight},
@@ -291,54 +316,56 @@ func (s *server) drive(dir *pb.Direction) {
 }
 
 type engine struct {
-	fwdPin, pwrPin embd.DigitalPin
+	fwdPin, pwrPin gpio.PinIO
 	pwr            int32
 }
 
 func newEngine(pwrPin, fwdPin int) (*engine, error) {
 	var e engine
-	var err error
-	e.pwrPin, err = embd.NewDigitalPin(pwrPin)
-	if err != nil {
-		return nil, fmt.Errorf("can't init power pin: %v", err)
+
+	pwr := gpioreg.ByName(fmt.Sprintf("GPIO%d", pwrPin))
+	if pwr == nil {
+		return nil, fmt.Errorf("can't find power pin GPIO%d", pwrPin)
 	}
-	e.fwdPin, err = embd.NewDigitalPin(fwdPin)
-	if err != nil {
-		return nil, fmt.Errorf("can't init forward pin: %v", err)
+	fwd := gpioreg.ByName(fmt.Sprintf("GPIO%d", fwdPin))
+	if fwd == nil {
+		return nil, fmt.Errorf("can't find forward pin GPIO%d", fwdPin)
 	}
 
-	// Set direction.
-	if err := e.pwrPin.SetDirection(embd.Out); err != nil {
-		return nil, fmt.Errorf("can't set power direction: %v", err)
+	e.pwrPin = pwr
+	e.fwdPin = fwd
+
+	if err := e.pwrPin.Out(gpio.Low); err != nil {
+		return nil, fmt.Errorf("can't configure power pin: %v", err)
 	}
-	if err := e.fwdPin.SetDirection(embd.Out); err != nil {
-		return nil, fmt.Errorf("can't set forward direction: %v", err)
+	if err := e.fwdPin.Out(gpio.Low); err != nil {
+		return nil, fmt.Errorf("can't configure forward pin: %v", err)
 	}
+
 	go e.startPWM()
 	return &e, nil
 }
 
 func (e *engine) close() {
-	e.pwrPin.Close()
-	e.fwdPin.Close()
+	// No-op for periph.io; pins are released on process exit.
 }
 
 func (e *engine) startPWM() {
 	ticker := time.NewTicker(time.Millisecond * 25)
-	flap := embd.Low
+	flap := gpio.Low
 	for range ticker.C {
 		switch {
 		case e.pwr < 15:
-			e.pwrPin.Write(embd.Low)
+			_ = e.pwrPin.Out(gpio.Low)
 		case e.pwr < 50:
-			e.pwrPin.Write(flap)
-			if flap == embd.Low {
-				flap = embd.High
+			_ = e.pwrPin.Out(flap)
+			if flap == gpio.Low {
+				flap = gpio.High
 			} else {
-				flap = embd.Low
+				flap = gpio.Low
 			}
 		default:
-			e.pwrPin.Write(embd.High)
+			_ = e.pwrPin.Out(gpio.High)
 		}
 	}
 }
@@ -402,12 +429,11 @@ func main() {
 
 	go http.ListenAndServe(":9191", nil)
 
-	// Initialize GPIO.
+	// Initialize periph.io host drivers.
 	var err error
-	if err = embd.InitGPIO(); err != nil {
-		log.Fatalf("Can't init GPIO: %v", err)
+	if _, err = host.Init(); err != nil {
+		log.Fatalf("Can't init periph.io: %v", err)
 	}
-	defer embd.CloseGPIO()
 	front, err := newEcho("front", 9, 10)
 	if err != nil {
 		log.Fatalf("Can't init front echo: %v", err)
@@ -478,7 +504,6 @@ func main() {
 		rear.close()
 		left.close()
 		right.close()
-		embd.CloseGPIO()
 		lis.Close()
 		bcast.Close()
 		os.Exit(0)
